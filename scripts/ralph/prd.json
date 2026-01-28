@@ -1,0 +1,236 @@
+{
+  "featureName": "Bash Monitoring TUI and Scripts",
+  "branchName": "ralph/bash-monitoring-tui",
+  "description": "Create bash equivalents for all PowerShell monitoring and management scripts, with comprehensive tests using bats (Bash Automated Testing System)",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Create ralph-utils.sh shared library",
+      "priority": 1,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/ralph-utils.sh with shared functions",
+        "Implement get_ralph_paths() function returning script paths",
+        "Implement read_prd_json() function using jq",
+        "Implement get_prd_status() returning complete/total/percentage",
+        "Implement get_ralph_instances() for multi-instance support",
+        "Implement get_ralph_story_locks() for lock management",
+        "Implement lock_ralph_story() and unlock_ralph_story()",
+        "Script is POSIX-compatible with bash extensions",
+        "All functions are documented with comments",
+        "Script passes shellcheck without errors"
+      ],
+      "passes": true,
+      "notes": "Mirror RalphUtils.psm1 functionality. Use jq for JSON parsing.",
+      "claimedBy": null
+    },
+    {
+      "id": "US-002",
+      "title": "Create ralph-status.sh script",
+      "priority": 2,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/ralph-status.sh",
+        "Source ralph-utils.sh for shared functions",
+        "Display banner with current git branch",
+        "Show progress bar using Unicode block characters",
+        "Display story table with ID, Priority, Status, Title columns",
+        "Color-coded status (green=complete, yellow=pending)",
+        "List incomplete stories sorted by priority",
+        "Handle missing prd.json gracefully with helpful message",
+        "Script passes shellcheck without errors",
+        "Script is executable (chmod +x)"
+      ],
+      "passes": true,
+      "notes": "Match ralph-status.ps1 output format and functionality",
+      "claimedBy": null
+    },
+    {
+      "id": "US-003",
+      "title": "Create ralph-locks.sh script",
+      "priority": 3,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/ralph-locks.sh",
+        "Source ralph-utils.sh for shared functions",
+        "Implement 'status' command showing all current locks",
+        "Implement 'release -s STORY_ID' command for single lock",
+        "Implement 'release-all' command for all locks",
+        "Implement 'cleanup' command for stale locks (>2 hours)",
+        "Display lock owner, age, and status (valid/stale/dead)",
+        "Color-coded output (green=valid, yellow=stale, red=dead)",
+        "Script passes shellcheck without errors",
+        "Script is executable (chmod +x)"
+      ],
+      "passes": true,
+      "notes": "Match ralph-locks.ps1 commands and output format",
+      "claimedBy": null
+    },
+    {
+      "id": "US-004",
+      "title": "Create ralph-cleanup.sh script",
+      "priority": 4,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/ralph-cleanup.sh",
+        "Source ralph-utils.sh for shared functions",
+        "Implement '-d/--dead' flag to clean dead instances",
+        "Implement '-o/--old' flag to clean old instances (>7 days)",
+        "Implement '-a/--all' flag for both dead and old",
+        "Implement '--dry-run' flag for preview mode",
+        "Show instance summary (total, running, completed, terminated, dead)",
+        "Release locks held by dead instances during cleanup",
+        "Script passes shellcheck without errors",
+        "Script is executable (chmod +x)"
+      ],
+      "passes": true,
+      "notes": "Match ralph-cleanup.ps1 functionality. Respect RALPH_CLEANUP_TTL env var.",
+      "claimedBy": null
+    },
+    {
+      "id": "US-005",
+      "title": "Create ralph-dashboard.sh TUI script",
+      "priority": 5,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/ralph-dashboard.sh",
+        "Source ralph-utils.sh for shared functions",
+        "Display header with PRD progress bar",
+        "Show instance table: ID, Story, State, Iteration, Runtime, Branch",
+        "Show active locks section with owner and age",
+        "Implement auto-refresh (default 2 seconds, configurable)",
+        "Support keyboard shortcuts: q=quit, r=refresh, l=locks, c=cleanup",
+        "Use Unicode box drawing characters for TUI frame",
+        "Color-coded instance states (green=working, cyan=claiming, yellow=idle, red=dead)",
+        "Script passes shellcheck without errors",
+        "Script is executable (chmod +x)"
+      ],
+      "passes": true,
+      "notes": "Match ralph-dashboard.ps1 layout. Use tput for terminal control.",
+      "claimedBy": null
+    },
+    {
+      "id": "US-006",
+      "title": "Create bats test framework setup",
+      "priority": 6,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/tests/bash/ directory structure",
+        "Create test_helper.bash with common test utilities",
+        "Include mock functions for git, jq, and external commands",
+        "Setup temporary directory management for tests",
+        "Create sample prd.json fixtures for testing",
+        "Document how to run tests in scripts/ralph/tests/bash/README.md",
+        "Verify bats is available or provide installation instructions"
+      ],
+      "passes": false,
+      "notes": "Use bats-core, bats-support, and bats-assert libraries"
+    },
+    {
+      "id": "US-007",
+      "title": "Create tests for ralph-utils.sh",
+      "priority": 7,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/tests/bash/ralph-utils.bats",
+        "Test get_ralph_paths() returns correct paths",
+        "Test read_prd_json() with valid JSON",
+        "Test read_prd_json() with missing file returns error",
+        "Test get_prd_status() calculates correct percentages",
+        "Test get_ralph_instances() parses instance data",
+        "Test lock_ralph_story() creates lock file",
+        "Test unlock_ralph_story() removes lock file",
+        "Test get_ralph_story_locks() lists all locks",
+        "All tests pass with bats"
+      ],
+      "passes": false,
+      "notes": "Use mock fixtures and temporary directories"
+    },
+    {
+      "id": "US-008",
+      "title": "Create tests for ralph-status.sh",
+      "priority": 8,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/tests/bash/ralph-status.bats",
+        "Test displays progress bar correctly",
+        "Test shows all stories from prd.json",
+        "Test handles missing prd.json with error message",
+        "Test handles empty userStories array",
+        "Test correct color codes in output",
+        "Test sorts stories by priority",
+        "All tests pass with bats"
+      ],
+      "passes": false,
+      "notes": "Capture and verify terminal output"
+    },
+    {
+      "id": "US-009",
+      "title": "Create tests for ralph-locks.sh",
+      "priority": 9,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/tests/bash/ralph-locks.bats",
+        "Test 'status' command shows existing locks",
+        "Test 'status' command with no locks",
+        "Test 'release' command removes specific lock",
+        "Test 'release-all' command removes all locks",
+        "Test 'cleanup' removes only stale locks",
+        "Test identifies dead owner locks correctly",
+        "All tests pass with bats"
+      ],
+      "passes": false,
+      "notes": "Create mock lock files for testing"
+    },
+    {
+      "id": "US-010",
+      "title": "Create tests for ralph-cleanup.sh",
+      "priority": 10,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/tests/bash/ralph-cleanup.bats",
+        "Test summary display with various instance states",
+        "Test --dead flag cleans only dead instances",
+        "Test --old flag cleans only old instances",
+        "Test --all flag cleans both",
+        "Test --dry-run shows actions without executing",
+        "Test releases locks from cleaned instances",
+        "All tests pass with bats"
+      ],
+      "passes": false,
+      "notes": "Create mock instance directories with status.json files"
+    },
+    {
+      "id": "US-011",
+      "title": "Create tests for ralph-dashboard.sh",
+      "priority": 11,
+      "acceptanceCriteria": [
+        "Create scripts/ralph/tests/bash/ralph-dashboard.bats",
+        "Test render functions produce valid output",
+        "Test progress bar calculation",
+        "Test duration formatting (seconds, minutes, hours)",
+        "Test instance state color mapping",
+        "Test handles no instances gracefully",
+        "Test handles no locks gracefully",
+        "All tests pass with bats"
+      ],
+      "passes": false,
+      "notes": "Test rendering functions independently, mock terminal"
+    },
+    {
+      "id": "US-012",
+      "title": "Validate bash scripts match PowerShell behavior",
+      "priority": 12,
+      "acceptanceCriteria": [
+        "Run ralph-status.sh and ralph-status.ps1 with same prd.json, compare outputs",
+        "Run ralph-locks.sh and ralph-locks.ps1, compare command outputs",
+        "Run ralph-cleanup.sh and ralph-cleanup.ps1 with same test data",
+        "Document any intentional differences",
+        "All bash scripts produce equivalent functionality",
+        "Update README.md with bash script documentation"
+      ],
+      "passes": false,
+      "notes": "Create integration test that compares outputs side by side"
+    }
+  ],
+  "qualityChecks": {
+    "lint": "shellcheck scripts/ralph/*.sh",
+    "test": "bats scripts/ralph/tests/bash/*.bats"
+  },
+  "techStack": {
+    "shell": "Bash 4+",
+    "testing": "bats-core with bats-support and bats-assert",
+    "linting": "shellcheck",
+    "jsonParsing": "jq"
+  }
+}
