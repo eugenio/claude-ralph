@@ -1,0 +1,13 @@
+{
+  "featureName": "Empty Test Feature",
+  "branchName": "test/empty-feature",
+  "description": "A PRD with no user stories",
+  "userStories": [],
+  "qualityChecks": {
+    "lint": "echo 'lint ok'",
+    "test": "echo 'test ok'"
+  },
+  "techStack": {
+    "shell": "Bash 4+"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "featureName": "Feature With Claims",
+  "branchName": "test/with-claims",
+  "description": "A PRD with some stories claimed by instances",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "First story - complete",
+      "priority": 1,
+      "acceptanceCriteria": [
+        "Criterion 1"
+      ],
+      "passes": true,
+      "notes": "Done",
+      "claimedBy": null
+    },
+    {
+      "id": "US-002",
+      "title": "Second story - claimed",
+      "priority": 2,
+      "acceptanceCriteria": [
+        "Criterion 1"
+      ],
+      "passes": false,
+      "notes": "In progress",
+      "claimedBy": "test-instance-1234-5678901234"
+    },
+    {
+      "id": "US-003",
+      "title": "Third story - available",
+      "priority": 3,
+      "acceptanceCriteria": [
+        "Criterion 1"
+      ],
+      "passes": false,
+      "notes": "Not started",
+      "claimedBy": null
+    },
+    {
+      "id": "US-004",
+      "title": "Fourth story - claimed by dead instance",
+      "priority": 4,
+      "acceptanceCriteria": [
+        "Criterion 1"
+      ],
+      "passes": false,
+      "notes": "Claimed by dead instance",
+      "claimedBy": "dead-instance-9999-0000000000"
+    }
+  ],
+  "qualityChecks": {
+    "lint": "echo 'lint'",
+    "test": "echo 'test'"
+  },
+  "techStack": {
+    "shell": "Bash 4+"
+  }
+}

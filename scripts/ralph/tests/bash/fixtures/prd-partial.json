@@ -1,0 +1,62 @@
+{
+  "featureName": "Partial Test Feature",
+  "branchName": "test/partial-feature",
+  "description": "A PRD with some completed stories",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "First completed story",
+      "priority": 1,
+      "acceptanceCriteria": [
+        "Criterion 1 for US-001",
+        "Criterion 2 for US-001"
+      ],
+      "passes": true,
+      "notes": "This story is complete",
+      "claimedBy": null
+    },
+    {
+      "id": "US-002",
+      "title": "Second incomplete story",
+      "priority": 2,
+      "acceptanceCriteria": [
+        "Criterion 1 for US-002"
+      ],
+      "passes": false,
+      "notes": "This story is not yet started",
+      "claimedBy": null
+    },
+    {
+      "id": "US-003",
+      "title": "Third incomplete story",
+      "priority": 3,
+      "acceptanceCriteria": [
+        "Criterion 1 for US-003",
+        "Criterion 2 for US-003",
+        "Criterion 3 for US-003"
+      ],
+      "passes": false,
+      "notes": "Lower priority story",
+      "claimedBy": null
+    },
+    {
+      "id": "US-004",
+      "title": "Fourth completed story",
+      "priority": 4,
+      "acceptanceCriteria": [
+        "Criterion 1 for US-004"
+      ],
+      "passes": true,
+      "notes": "Another completed story",
+      "claimedBy": null
+    }
+  ],
+  "qualityChecks": {
+    "lint": "shellcheck scripts/ralph/*.sh",
+    "test": "bats scripts/ralph/tests/bash/*.bats"
+  },
+  "techStack": {
+    "shell": "Bash 4+",
+    "testing": "bats-core"
+  }
+}
