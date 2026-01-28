@@ -70,7 +70,8 @@ function Get-SourceSkillsPath {
     [OutputType([string])]
     param()
 
-    return Join-Path $PSScriptRoot 'skills'
+    # Skills are at repo root (../../skills from scripts/ralph/)
+    return Join-Path $PSScriptRoot '..' '..' 'skills'
 }
 
 function Get-DestinationSkillsPath {

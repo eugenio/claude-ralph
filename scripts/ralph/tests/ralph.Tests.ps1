@@ -767,7 +767,8 @@ Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 
             $created | Should -BeFalse
             $content = Get-Content $progressFile -Raw
-            $content | Should -Be "Existing content`n"
+            # Use platform-agnostic line ending comparison
+            $content.TrimEnd() | Should -Be 'Existing content'
         }
     }
 }

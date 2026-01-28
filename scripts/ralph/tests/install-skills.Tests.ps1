@@ -42,9 +42,10 @@ BeforeAll {
     }
 
     # Get-SourceSkillsPath function replica (needs PSScriptRoot context)
+    # Skills are at repo root (../../skills from scripts/ralph/)
     $script:GetSourceSkillsPath = {
         param([string]$ScriptRoot)
-        return Join-Path $ScriptRoot 'skills'
+        return Join-Path $ScriptRoot '..' '..' 'skills'
     }
 
     # Get-DestinationSkillsPath function replica
@@ -233,24 +234,27 @@ Describe 'Source Skills Path' {
     Context 'Path construction' {
         It 'Returns path relative to script root' {
             # Use cross-platform path for testing
+            # Skills are at repo root (../../skills from scripts/ralph/)
             $testRoot = if ($IsWindows) { 'C:\test\scripts\ralph' } else { '/tmp/test/scripts/ralph' }
             $result = & $script:GetSourceSkillsPath -ScriptRoot $testRoot
-            $result | Should -Be (Join-Path $testRoot 'skills')
+            $result | Should -Be (Join-Path $testRoot '..' '..' 'skills')
         }
 
         It 'Uses Join-Path for cross-platform compatibility' {
-            $script:scriptContent | Should -Match "Join-Path \`$PSScriptRoot 'skills'"
+            $script:scriptContent | Should -Match "Join-Path \`$PSScriptRoot '\.\.' '\.\.' 'skills'"
         }
     }
 
     Context 'Actual skills directory' {
         It 'Skills directory exists in the project' {
-            $actualSourcePath = Join-Path $PSScriptRoot '..' 'skills'
+            # Skills are at repo root (../../../skills from scripts/ralph/tests/)
+            $actualSourcePath = Join-Path $PSScriptRoot '..' '..' '..' 'skills'
             Test-Path $actualSourcePath | Should -Be $true
         }
 
         It 'Skills directory contains subdirectories' {
-            $actualSourcePath = Join-Path $PSScriptRoot '..' 'skills'
+            # Skills are at repo root (../../../skills from scripts/ralph/tests/)
+            $actualSourcePath = Join-Path $PSScriptRoot '..' '..' '..' 'skills'
             $skillDirs = Get-ChildItem -Path $actualSourcePath -Directory -ErrorAction SilentlyContinue
             $skillDirs.Count | Should -BeGreaterOrEqual 1
         }
