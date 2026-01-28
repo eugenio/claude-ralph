@@ -990,11 +990,25 @@ function Get-RalphStoryLock {
         return $null
     }
 
+    # Read with .txt extension (new format) or without (legacy format)
     $ownerFile = Join-Path $lockDir 'owner.txt'
+    $ownerFileLegacy = Join-Path $lockDir 'owner'
     $timestampFile = Join-Path $lockDir 'timestamp.txt'
+    $timestampFileLegacy = Join-Path $lockDir 'timestamp'
 
-    $owner = if (Test-Path $ownerFile) { (Get-Content $ownerFile -Raw).Trim() } else { 'unknown' }
-    $timestamp = if (Test-Path $timestampFile) { [long](Get-Content $timestampFile -Raw).Trim() } else { 0 }
+    $owner = 'unknown'
+    if (Test-Path $ownerFile) {
+        $owner = (Get-Content $ownerFile -Raw).Trim()
+    } elseif (Test-Path $ownerFileLegacy) {
+        $owner = (Get-Content $ownerFileLegacy -Raw).Trim()
+    }
+
+    $timestamp = 0
+    if (Test-Path $timestampFile) {
+        $timestamp = [long](Get-Content $timestampFile -Raw).Trim()
+    } elseif (Test-Path $timestampFileLegacy) {
+        $timestamp = [long](Get-Content $timestampFileLegacy -Raw).Trim()
+    }
 
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $age = $now - $timestamp
