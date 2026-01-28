@@ -1,0 +1,100 @@
+## Codebase Patterns
+- Use `eval "$(get_ralph_paths)"` to load path variables in bash scripts
+- jq is required for JSON parsing in bash scripts
+- Shellcheck directives must be on separate lines before the command, not as trailing comments
+- Multi-character Unicode progress bars require careful loop construction (avoid `seq` with printf format strings)
+- Use atomic directory creation `mkdir` for lock acquisition (fails if dir exists)
+- Store heartbeat timestamps as Unix epoch for cross-language compatibility
+- Use flock for file-level locking when available
+
+---
+
+## 2026-01-28 - US-001
+- What was implemented:
+  - Created scripts/ralph/ralph-utils.sh shared library with bash equivalents of RalphUtils.psm1
+  - Implemented path functions: get_ralph_paths(), get_ralph_dir(), get_project_root()
+  - Implemented PRD functions: read_prd_json(), write_prd_json(), get_prd_status(), get_incomplete_stories()
+  - Implemented multi-instance functions: get_ralph_instance_id(), get_ralph_short_id(), new_ralph_instance_directory(), update_ralph_status(), get_ralph_instances()
+  - Implemented locking functions: lock_ralph_story(), unlock_ralph_story(), test_ralph_story_locked(), get_ralph_story_lock(), get_ralph_story_locks(), clear_ralph_stale_lock(), clear_ralph_stale_locks()
+  - Implemented PRD atomic operations: read_ralph_prd_safe(), update_ralph_prd()
+  - Implemented story claiming: get_ralph_next_story(), request_ralph_story_claim(), release_ralph_story_claim(), request_ralph_next_story_claim()
+  - Implemented utility functions: format_duration(), render_progress_bar(), write_colored(), add_log_entry()
+- Files changed:
+  - scripts/ralph/ralph-utils.sh (created, ~1170 lines)
+- **Learnings for future iterations:**
+  - Shellcheck can be installed via direct binary download when package managers aren't available
+  - Function-level shellcheck disable directives work for heredocs
+  - Instance ID format: {user}-{hostname}-{pid}-{timestamp} for uniqueness
+  - Use `|| true` after arithmetic operations that might result in 0 to prevent script exit in strict mode
+---
+
+## 2026-01-28 - US-002
+- What was implemented:
+  - Created scripts/ralph/ralph-status.sh - bash equivalent of ralph-status.ps1
+  - Display functions: show_banner(), show_progress_summary(), show_story_table(), show_incomplete_stories()
+  - Helper functions: get_git_branch(), repeat_char(), pad_right(), truncate_string()
+  - Sources ralph-utils.sh for shared color codes and functions
+  - Matches PowerShell output format with Unicode box-drawing characters
+- Files changed:
+  - scripts/ralph/ralph-status.sh (created, ~260 lines)
+- **Learnings for future iterations:**
+  - render_progress_bar() from ralph-utils.sh already includes brackets, don't add extra ones
+  - Use `shellcheck -x` flag to follow sourced files and avoid SC1091 warnings
+  - Path resolution in ralph scripts is relative to script directory via RALPH_SCRIPT_DIR, not cwd
+  - jq with `-c` flag for compact output is useful when iterating over JSON arrays with `while read`
+---
+
+## 2026-01-28 - US-003
+- What was implemented:
+  - Created scripts/ralph/ralph-locks.sh - bash equivalent of ralph-locks.ps1
+  - Lock management commands: status, release, release-all, cleanup
+  - Display functions: show_lock_status(), show_help()
+  - Command functions: cmd_release(), cmd_release_all(), cmd_cleanup()
+  - Sources ralph-utils.sh for shared functions (get_ralph_story_locks, unlock_ralph_story, etc.)
+  - Matches PowerShell output format with Unicode box-drawing characters
+  - Color-coded lock status: green=valid, yellow=stale, red=dead owner
+- Files changed:
+  - scripts/ralph/ralph-locks.sh (created, ~285 lines)
+- **Learnings for future iterations:**
+  - Subshell pipelines (e.g., `while read`) cannot increment variables in the parent shell scope
+  - Count locks before the loop rather than incrementing a counter inside a piped while loop
+  - The `-s` flag convention for story ID matches other ralph scripts (e.g., release -s US-001)
+---
+
+## 2026-01-28 - US-004
+- What was implemented:
+  - Created scripts/ralph/ralph-cleanup.sh - bash equivalent of ralph-cleanup.ps1
+  - Cleanup functions: show_summary(), clear_dead_instances(), clear_old_instances()
+  - CLI argument parsing with short (-d, -o, -a) and long (--dead, --old, --all) flags
+  - Dry-run mode (--dry-run) for previewing cleanup actions
+  - Instance summary displaying total, running, completed, terminated, dead counts
+  - Releases locks held by dead instances during cleanup
+  - Respects RALPH_CLEANUP_TTL environment variable (default: 7 days)
+- Files changed:
+  - scripts/ralph/ralph-cleanup.sh (created, ~320 lines)
+- **Learnings for future iterations:**
+  - Use `((cleaned++)) || true` to prevent exit on arithmetic result of 0 in strict mode
+  - get_ralph_instances() accepts "all" parameter to include dead instances
+  - Instance state "terminated" means manually terminated, "dead" means no heartbeat > 5 min
+  - Match PowerShell -WhatIf behavior with --dry-run flag in bash scripts
+---
+
+## 2026-01-28 - US-005
+- What was implemented:
+  - Created scripts/ralph/ralph-dashboard.sh - bash equivalent of ralph-dashboard.ps1
+  - TUI functions: render_header(), render_instances(), render_locks(), render_footer()
+  - Helper functions: get_progress_bar(), format_duration(), get_state_color(), truncate_string()
+  - Unicode box drawing for TUI frame using BOX_TL, BOX_TR, BOX_BL, BOX_BR, etc.
+  - Auto-refresh loop with configurable interval (default 2 seconds)
+  - Keyboard shortcuts: q=quit, r=refresh, l=locks, c=cleanup
+  - Color-coded instance states: green=working/merging, cyan=claiming/starting, yellow=idle, red=dead
+  - Sources ralph-utils.sh and invokes ralph-locks.sh, ralph-cleanup.sh for detail views
+- Files changed:
+  - scripts/ralph/ralph-dashboard.sh (created, ~495 lines)
+  - Also brought in from other branches: ralph-status.sh, ralph-locks.sh, ralph-cleanup.sh
+- **Learnings for future iterations:**
+  - Use `tput civis` and `tput cnorm` to hide/show cursor in TUI applications
+  - Extract epoch from instance ID using bash parameter expansion: `${instance_id##*-}`
+  - Non-blocking key read: `read -rsn1 -t 0.1` with timeout for responsive TUI
+  - Trap EXIT for cleanup to ensure cursor is restored even on errors
+---
