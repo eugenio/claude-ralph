@@ -49,11 +49,23 @@ Import-Module $modulePath -Force
 # Get paths
 $paths = Get-RalphPaths
 
+# Script-level variables for multi-instance
+$script:InstancePaths = $null
+$script:CurrentStoryId = $null
+
 function Show-Banner {
+    $shortId = Get-RalphShortId
     Write-Host ''
     Write-Host ([char]0x2554 + [string]::new([char]0x2550, 55) + [char]0x2557) -ForegroundColor Blue
-    Write-Host ([char]0x2551 + '                  claude-ralph                         ' + [char]0x2551) -ForegroundColor Blue
+    Write-Host ([char]0x2551 + '           claude-ralph (multi-instance)               ' + [char]0x2551) -ForegroundColor Blue
     Write-Host ([char]0x2551 + '  Autonomous AI Agent Loop (Claude Subscription)       ' + [char]0x2551) -ForegroundColor Blue
+    Write-Host ([char]0x2560 + [string]::new([char]0x2550, 55) + [char]0x2563) -ForegroundColor Blue
+    $instanceLine = "  Instance: $shortId"
+    $padding = 55 - $instanceLine.Length
+    Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
+    Write-Host $instanceLine -NoNewline -ForegroundColor Magenta
+    Write-Host (' ' * $padding) -NoNewline
+    Write-Host ([char]0x2551) -ForegroundColor Blue
     Write-Host ([char]0x255A + [string]::new([char]0x2550, 55) + [char]0x255D) -ForegroundColor Blue
     Write-Host ''
 }
@@ -78,9 +90,13 @@ function Show-MaxIterationsBanner {
 }
 
 function Show-IterationBanner {
-    param([int]$Current, [int]$Max)
+    param([int]$Current, [int]$Max, [string]$StoryId)
+    $shortId = Get-RalphShortId
     Write-Host ([string]::new([char]0x2550, 55)) -ForegroundColor Blue
-    Write-Host "                    ITERATION $Current / $Max" -ForegroundColor Cyan
+    Write-Host "  [$shortId] ITERATION $Current / $Max" -ForegroundColor Cyan
+    if ($StoryId) {
+        Write-Host "  Working on: $StoryId" -ForegroundColor Yellow
+    }
     Write-Host ([string]::new([char]0x2550, 55)) -ForegroundColor Blue
 }
 
@@ -280,6 +296,10 @@ function Main {
         exit 1
     }
 
+    # Initialize multi-instance
+    $script:InstancePaths = New-RalphInstanceDirectory
+    Register-RalphCleanup
+
     # Show banner
     Show-Banner
 
@@ -292,7 +312,7 @@ function Main {
     }
 
     # Read PRD
-    $prd = Read-PrdJson
+    $prd = Read-RalphPrdSafe
     if ($null -eq $prd) {
         Write-Host 'Error: Failed to read prd.json' -ForegroundColor Red
         exit 1
@@ -304,11 +324,9 @@ function Main {
     # Save current branch
     Save-CurrentBranch -Prd $prd
 
-    # Initialize progress file
-    Initialize-ProgressFile
-
     # Log start
-    Add-LogEntry "Starting Ralph with max $MaxIterations iterations"
+    Add-RalphInstanceLog "Starting Ralph with max $MaxIterations iterations"
+    Update-RalphStatus -State 'starting' -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
 
     # Show initial status
     $status = Get-PrdStatus -Prd $prd
@@ -317,65 +335,115 @@ function Main {
 
     # Main loop
     for ($i = 1; $i -le $MaxIterations; $i++) {
-        Show-IterationBanner -Current $i -Max $MaxIterations
-
-        # Refresh PRD and status at start of each iteration
-        $prd = Read-PrdJson
-        $status = Get-PrdStatus -Prd $prd
-        Show-Status -Status $status
+        Update-RalphStatus -State 'idle' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
 
         # Check if already complete BEFORE starting work
+        $prd = Read-RalphPrdSafe
         if (Test-AllStoriesComplete -Prd $prd) {
             Write-ColoredOutput 'All stories complete! Exiting successfully.' -Color Green
-            Add-LogEntry "All stories complete at iteration $i"
+            Add-RalphInstanceLog "All stories complete at iteration $i"
+            Update-RalphStatus -State 'completed' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
             exit 0
         }
 
-        Add-LogEntry "Starting iteration $i"
+        # Claim a story to work on
+        Update-RalphStatus -State 'claiming' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+        $story = Request-RalphNextStoryClaim
+
+        if (-not $story) {
+            Add-RalphInstanceLog "No stories to claim. Checking if all complete..."
+            if (Test-AllStoriesComplete -Prd (Read-RalphPrdSafe)) {
+                Write-ColoredOutput 'All stories complete! Exiting successfully.' -Color Green
+                Update-RalphStatus -State 'completed' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+                exit 0
+            }
+            else {
+                Add-RalphInstanceLog "Stories remain but none available. Another instance may be working. Exiting."
+                Update-RalphStatus -State 'idle' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+                exit 0
+            }
+        }
+
+        $script:CurrentStoryId = $story.id
+        Set-RalphCurrentStory -StoryId $story.id
+        $storyTitle = $story.title
+
+        Show-IterationBanner -Current $i -Max $MaxIterations -StoryId $story.id
+        $status = Get-PrdStatus -Prd $prd
+        Show-Status -Status $status
+
+        Add-RalphInstanceLog "Working on: $($story.id) - $storyTitle"
+        Update-RalphStatus -State 'working' -CurrentStory $story.id -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+
+        # Create feature branch
+        $branch = New-RalphStoryBranch -StoryId $story.id
+        Update-RalphStatus -State 'working' -CurrentStory $story.id -Iteration $i -MaxIterations $MaxIterations -Branch $branch -InstancePaths $script:InstancePaths
+
+        Add-RalphInstanceLog "Starting iteration $i for $($story.id)"
 
         # Run Claude Code
         try {
             $result = Invoke-ClaudeCode -PromptPath $paths.PromptFile -ProjectRoot $paths.ProjectRoot
 
             if ($result.ExitCode -ne 0) {
-                Add-LogEntry "Claude Code exited with code $($result.ExitCode)"
+                Add-RalphInstanceLog "Claude Code exited with code $($result.ExitCode)"
                 Write-ColoredOutput "Claude Code failed with exit code $($result.ExitCode)" -Color Red
-                Write-ColoredOutput 'Continuing to next iteration...' -Color Yellow
+                Write-ColoredOutput 'Releasing story and continuing...' -Color Yellow
+                Release-RalphStoryClaim -StoryId $story.id
+                $script:CurrentStoryId = $null
             }
         }
         catch {
-            Add-LogEntry "Error running Claude Code: $_"
+            Add-RalphInstanceLog "Error running Claude Code: $_"
             Write-ColoredOutput "Error running Claude Code: $_" -Color Red
-            Write-ColoredOutput 'Continuing to next iteration...' -Color Yellow
+            Write-ColoredOutput 'Releasing story and continuing...' -Color Yellow
+            Release-RalphStoryClaim -StoryId $story.id
+            $script:CurrentStoryId = $null
             continue
         }
+
+        # Update heartbeat
+        Update-RalphStatus -State 'working' -CurrentStory $story.id -Iteration $i -MaxIterations $MaxIterations -Branch $branch -InstancePaths $script:InstancePaths
 
         Write-Host ''
         Write-ColoredOutput "Iteration $i completed. Checking status..." -Color Blue
 
+        # Check if story was completed
+        $prd = Read-RalphPrdSafe
+        $storyStatus = $prd.userStories | Where-Object { $_.id -eq $story.id }
+
+        if ($storyStatus.passes -eq $true) {
+            Add-RalphInstanceLog "Story $($story.id) completed!"
+
+            # Merge back to main branch
+            Update-RalphStatus -State 'merging' -CurrentStory $story.id -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+            $null = Merge-RalphStoryBranch -StoryId $story.id
+
+            # Release claim
+            Release-RalphStoryClaim -StoryId $story.id
+            $script:CurrentStoryId = $null
+        }
+
         # Check for completion signal from Claude
         $hasSignal = Test-CompletionSignal -Output $result.Output
 
-        # Re-read PRD to get latest status (Claude may have updated it)
-        $prd = Read-PrdJson
-
         # Only exit if we find the tag AND all stories are actually complete
-        # This prevents false positives from Claude mentioning the tag in explanations
         if ($hasSignal -and (Test-AllStoriesComplete -Prd $prd)) {
             Show-CompleteBanner
-            Add-LogEntry "Done! All stories complete at iteration $i (verified via COMPLETE signal + PRD check)"
+            Add-RalphInstanceLog "Done! All stories complete at iteration $i (verified via COMPLETE signal + PRD check)"
+            Update-RalphStatus -State 'completed' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
             exit 0
         }
         elseif ($hasSignal) {
-            Add-LogEntry 'Claude output COMPLETE signal but PRD still has incomplete stories - ignoring false positive'
+            Add-RalphInstanceLog 'Claude output COMPLETE signal but PRD still has incomplete stories - ignoring false positive'
             Write-ColoredOutput 'Warning: Completion signal detected but stories remain incomplete. Continuing...' -Color Yellow
         }
 
         # Check again AFTER Claude runs in case it updated the PRD
-        # This prevents early exit when there's still work to do
         if (Test-AllStoriesComplete -Prd $prd) {
             Show-CompleteBanner
-            Add-LogEntry "Done! All stories verified complete at iteration $i (via PRD check)"
+            Add-RalphInstanceLog "Done! All stories verified complete at iteration $i (via PRD check)"
+            Update-RalphStatus -State 'completed' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
             exit 0
         }
 
@@ -398,7 +466,13 @@ function Main {
     $status = Get-PrdStatus
     Show-Status -Status $status
 
-    Add-LogEntry 'Max iterations reached. Check prd.json for remaining stories.'
+    Add-RalphInstanceLog 'Max iterations reached. Check prd.json for remaining stories.'
+    Update-RalphStatus -State 'max_iterations' -CurrentStory $script:CurrentStoryId -Iteration $MaxIterations -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+
+    # Release any held story
+    if ($script:CurrentStoryId) {
+        Release-RalphStoryClaim -StoryId $script:CurrentStoryId
+    }
 }
 
 # Run main

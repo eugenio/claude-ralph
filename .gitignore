@@ -4,6 +4,14 @@ progress.txt
 .last-branch
 ralph.log
 
+# Multi-instance runtime directories and files
+instances/
+locks/
+scripts/ralph/instances/
+scripts/ralph/locks/
+.prd.lock
+*.pids
+
 # Banner (hosted externally)
 banner.png
 

@@ -386,6 +386,1480 @@ function Add-LogEntry {
     }
 }
 
+# =============================================================================
+# MULTI-INSTANCE FUNCTIONS
+# =============================================================================
+
+# Script-level instance variables (set once per session)
+$script:InstanceId = $null
+$script:InstanceShortId = $null
+
+<#
+.SYNOPSIS
+    Generates a unique instance ID for this Ralph session.
+
+.DESCRIPTION
+    Creates a unique identifier in the format: {username}-{hostname}-{pid}-{timestamp}
+    This ID is generated once per session and cached for subsequent calls.
+
+.PARAMETER Force
+    If specified, regenerates the instance ID even if already cached.
+
+.OUTPUTS
+    System.String
+    The unique instance ID.
+
+.EXAMPLE
+    $id = Get-RalphInstanceId
+    Write-Host "Instance: $id"
+#>
+function Get-RalphInstanceId {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()]
+        [switch]$Force
+    )
+
+    if ($script:InstanceId -and -not $Force) {
+        return $script:InstanceId
+    }
+
+    $user = $env:USERNAME ?? $env:USER ?? 'unknown'
+    $hostname = $env:COMPUTERNAME ?? (hostname) ?? 'local'
+    # Clean hostname of special characters
+    $hostname = $hostname -replace '[^a-zA-Z0-9_-]', ''
+    $pid = $PID
+    $timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+
+    $script:InstanceId = "$user-$hostname-$pid-$timestamp"
+    $script:InstanceShortId = $script:InstanceId.Substring(0, [Math]::Min(8, $script:InstanceId.Length))
+
+    return $script:InstanceId
+}
+
+<#
+.SYNOPSIS
+    Gets the short (8-character) instance ID.
+
+.DESCRIPTION
+    Returns the first 8 characters of the instance ID for display purposes.
+    Calls Get-RalphInstanceId if not already initialized.
+
+.OUTPUTS
+    System.String
+    The short instance ID (8 characters).
+
+.EXAMPLE
+    $shortId = Get-RalphShortId
+    Write-Host "[$shortId] Starting..."
+#>
+function Get-RalphShortId {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    if (-not $script:InstanceShortId) {
+        $null = Get-RalphInstanceId
+    }
+
+    return $script:InstanceShortId
+}
+
+<#
+.SYNOPSIS
+    Creates the instance-specific directory structure.
+
+.DESCRIPTION
+    Creates the instances/{instance-id}/ directory with initial log and progress files.
+    Also creates the locks/ directory if it doesn't exist.
+
+.PARAMETER InstanceId
+    Optional instance ID. If not specified, uses Get-RalphInstanceId.
+
+.OUTPUTS
+    System.Collections.Hashtable
+    A hashtable with instance-specific paths:
+    - InstanceDir: The instance directory path
+    - LogFile: Instance-specific log file
+    - ProgressFile: Instance-specific progress file
+    - StatusFile: Instance-specific status.json
+
+.EXAMPLE
+    $instancePaths = New-RalphInstanceDirectory
+    Write-Host "Logs at: $($instancePaths.LogFile)"
+#>
+function New-RalphInstanceDirectory {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$InstanceId
+    )
+
+    if (-not $InstanceId) {
+        $InstanceId = Get-RalphInstanceId
+    }
+
+    $paths = Get-RalphPaths
+    $instancesDir = Join-Path $paths.RalphDir 'instances'
+    $instanceDir = Join-Path $instancesDir $InstanceId
+    $locksDir = Join-Path $paths.RalphDir 'locks'
+
+    # Create directories
+    if (-not (Test-Path $instanceDir)) {
+        New-Item -Path $instanceDir -ItemType Directory -Force | Out-Null
+    }
+    if (-not (Test-Path $locksDir)) {
+        New-Item -Path $locksDir -ItemType Directory -Force | Out-Null
+    }
+
+    $instancePaths = @{
+        InstanceDir  = $instanceDir
+        LogFile      = Join-Path $instanceDir 'ralph.log'
+        ProgressFile = Join-Path $instanceDir 'progress.txt'
+        StatusFile   = Join-Path $instanceDir 'status.json'
+    }
+
+    # Initialize log file
+    $logHeader = @"
+# Ralph Instance Log
+# Instance ID: $InstanceId
+# Short ID: $(Get-RalphShortId)
+# Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+# Project: $($paths.ProjectRoot)
+---
+"@
+    Set-Content -Path $instancePaths.LogFile -Value $logHeader -Force
+
+    # Initialize progress file
+    $progressContent = @"
+# Ralph Progress Log
+Instance: $InstanceId
+Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+
+## Codebase Patterns
+(Patterns discovered during implementation will be added here)
+
+---
+"@
+    Set-Content -Path $instancePaths.ProgressFile -Value $progressContent -Force
+
+    # Initialize status
+    Update-RalphStatus -State 'starting' -InstancePaths $instancePaths
+
+    return $instancePaths
+}
+
+<#
+.SYNOPSIS
+    Updates the instance status.json file atomically.
+
+.DESCRIPTION
+    Writes the current instance status to status.json using atomic write
+    (write to temp file, then rename). Includes heartbeat timestamp.
+
+.PARAMETER State
+    Current state: starting, idle, claiming, working, merging, completed, terminated, max_iterations
+
+.PARAMETER CurrentStory
+    Optional story ID currently being worked on.
+
+.PARAMETER Iteration
+    Optional current iteration number.
+
+.PARAMETER MaxIterations
+    Optional maximum iterations configured.
+
+.PARAMETER Branch
+    Optional current git branch name.
+
+.PARAMETER InstancePaths
+    Optional hashtable with instance paths. If not provided, uses default location.
+
+.EXAMPLE
+    Update-RalphStatus -State 'working' -CurrentStory 'US-001' -Iteration 3
+
+.EXAMPLE
+    Update-RalphStatus -State 'terminated'
+#>
+function Update-RalphStatus {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('starting', 'idle', 'claiming', 'working', 'merging', 'completed', 'terminated', 'max_iterations')]
+        [string]$State,
+
+        [Parameter()]
+        [string]$CurrentStory = '',
+
+        [Parameter()]
+        [int]$Iteration = 0,
+
+        [Parameter()]
+        [int]$MaxIterations = 10,
+
+        [Parameter()]
+        [string]$Branch = '',
+
+        [Parameter()]
+        [hashtable]$InstancePaths
+    )
+
+    $instanceId = Get-RalphInstanceId
+    $shortId = Get-RalphShortId
+
+    if (-not $InstancePaths) {
+        $paths = Get-RalphPaths
+        $instanceDir = Join-Path (Join-Path $paths.RalphDir 'instances') $instanceId
+        $InstancePaths = @{
+            StatusFile = Join-Path $instanceDir 'status.json'
+        }
+    }
+
+    $now = Get-Date
+    $epochNow = [DateTimeOffset]::new($now).ToUnixTimeSeconds()
+
+    $status = @{
+        instanceId         = $instanceId
+        shortId            = $shortId
+        state              = $State
+        currentStory       = $CurrentStory
+        iteration          = $Iteration
+        maxIterations      = $MaxIterations
+        startTime          = $now.ToString('yyyy-MM-dd HH:mm:ss')
+        lastHeartbeat      = $now.ToString('yyyy-MM-dd HH:mm:ss')
+        lastHeartbeatEpoch = $epochNow
+        projectRoot        = (Get-RalphPaths).ProjectRoot
+        branch             = $Branch
+        pid                = $PID
+    }
+
+    $json = $status | ConvertTo-Json -Depth 5
+
+    # Atomic write: write to temp file, then rename
+    $tempFile = "$($InstancePaths.StatusFile).tmp"
+    try {
+        Set-Content -Path $tempFile -Value $json -Force -ErrorAction Stop
+        Move-Item -Path $tempFile -Destination $InstancePaths.StatusFile -Force -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Failed to update status: $_"
+        if (Test-Path $tempFile) {
+            Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+    Gets the status of a Ralph instance.
+
+.DESCRIPTION
+    Reads and returns the status.json for a specific instance.
+
+.PARAMETER InstanceId
+    The instance ID to get status for.
+
+.OUTPUTS
+    System.Management.Automation.PSObject
+    The status object, or $null if not found.
+
+.EXAMPLE
+    $status = Get-RalphInstanceStatus -InstanceId 'user-host-1234-1700000000'
+    Write-Host "State: $($status.state)"
+#>
+function Get-RalphInstanceStatus {
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$InstanceId
+    )
+
+    $paths = Get-RalphPaths
+    $statusFile = Join-Path (Join-Path (Join-Path $paths.RalphDir 'instances') $InstanceId) 'status.json'
+
+    if (-not (Test-Path $statusFile)) {
+        return $null
+    }
+
+    try {
+        $content = Get-Content -Path $statusFile -Raw -ErrorAction Stop
+        return $content | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Failed to read instance status: $_"
+        return $null
+    }
+}
+
+<#
+.SYNOPSIS
+    Gets all Ralph instances.
+
+.DESCRIPTION
+    Returns a list of all instance directories with their status.
+
+.PARAMETER IncludeDead
+    If specified, includes instances that appear to be dead (no heartbeat > 5 min).
+
+.OUTPUTS
+    System.Array
+    Array of instance status objects with additional 'isDead' property.
+
+.EXAMPLE
+    $instances = Get-RalphInstances
+    $instances | ForEach-Object { Write-Host "$($_.instanceId): $($_.state)" }
+#>
+function Get-RalphInstances {
+    [CmdletBinding()]
+    [OutputType([array])]
+    param(
+        [Parameter()]
+        [switch]$IncludeDead
+    )
+
+    $paths = Get-RalphPaths
+    $instancesDir = Join-Path $paths.RalphDir 'instances'
+
+    if (-not (Test-Path $instancesDir)) {
+        return @()
+    }
+
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $deadThreshold = 300  # 5 minutes
+
+    $instances = @()
+    Get-ChildItem -Path $instancesDir -Directory | ForEach-Object {
+        $statusFile = Join-Path $_.FullName 'status.json'
+        if (Test-Path $statusFile) {
+            try {
+                $status = Get-Content -Path $statusFile -Raw | ConvertFrom-Json
+                $heartbeatAge = $now - $status.lastHeartbeatEpoch
+                $isDead = ($heartbeatAge -gt $deadThreshold) -and ($status.state -notin @('terminated', 'completed'))
+
+                $status | Add-Member -NotePropertyName 'isDead' -NotePropertyValue $isDead -Force
+                $status | Add-Member -NotePropertyName 'heartbeatAge' -NotePropertyValue $heartbeatAge -Force
+
+                if ($IncludeDead -or -not $isDead) {
+                    $instances += $status
+                }
+            }
+            catch {
+                Write-Warning "Failed to read status for $($_.Name): $_"
+            }
+        }
+    }
+
+    return $instances
+}
+
+<#
+.SYNOPSIS
+    Adds a log entry to the instance-specific log file.
+
+.DESCRIPTION
+    Appends a timestamped log entry with instance short ID prefix.
+
+.PARAMETER Message
+    The message to log.
+
+.PARAMETER InstancePaths
+    Optional hashtable with instance paths.
+
+.EXAMPLE
+    Add-RalphInstanceLog -Message "Starting iteration 1"
+#>
+function Add-RalphInstanceLog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [string]$Message,
+
+        [Parameter()]
+        [hashtable]$InstancePaths
+    )
+
+    $shortId = Get-RalphShortId
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $entry = "[$timestamp] [$shortId] $Message"
+
+    if (-not $InstancePaths) {
+        $instanceId = Get-RalphInstanceId
+        $paths = Get-RalphPaths
+        $logFile = Join-Path (Join-Path (Join-Path $paths.RalphDir 'instances') $instanceId) 'ralph.log'
+    }
+    else {
+        $logFile = $InstancePaths.LogFile
+    }
+
+    try {
+        Add-Content -Path $logFile -Value $entry -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Failed to write instance log: $_"
+    }
+
+    # Also output to console
+    Write-Host $entry
+}
+
+# =============================================================================
+# STORY LOCKING FUNCTIONS (PS-002)
+# =============================================================================
+
+<#
+.SYNOPSIS
+    Acquires a lock on a story for exclusive access.
+
+.DESCRIPTION
+    Uses atomic directory creation to acquire a lock. If the directory
+    can be created, the lock is acquired. The lock contains owner ID
+    and timestamp files.
+
+.PARAMETER StoryId
+    The story ID to lock (e.g., 'US-001').
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if lock acquired, $false if already locked.
+
+.EXAMPLE
+    if (Lock-RalphStory -StoryId 'US-001') {
+        Write-Host "Lock acquired!"
+    }
+#>
+function Lock-RalphStory {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$StoryId
+    )
+
+    # First cleanup any stale locks
+    $null = Clear-RalphStaleLock -StoryId $StoryId
+
+    $paths = Get-RalphPaths
+    $lockDir = Join-Path (Join-Path $paths.RalphDir 'locks') "$StoryId.lock"
+
+    try {
+        # Atomic directory creation - fails if exists
+        New-Item -Path $lockDir -ItemType Directory -ErrorAction Stop | Out-Null
+
+        # Write owner and timestamp
+        $instanceId = Get-RalphInstanceId
+        Set-Content -Path (Join-Path $lockDir 'owner.txt') -Value $instanceId -Force
+        Set-Content -Path (Join-Path $lockDir 'timestamp.txt') -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -Force
+        Set-Content -Path (Join-Path $lockDir 'pid.txt') -Value $PID -Force
+
+        Add-RalphInstanceLog "Acquired lock for $StoryId"
+        return $true
+    }
+    catch {
+        # Directory already exists = lock held by someone else
+        return $false
+    }
+}
+
+<#
+.SYNOPSIS
+    Releases a lock on a story.
+
+.DESCRIPTION
+    Removes the lock directory if owned by this instance.
+
+.PARAMETER StoryId
+    The story ID to unlock.
+
+.PARAMETER Force
+    If specified, releases the lock even if owned by another instance.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if lock released, $false otherwise.
+
+.EXAMPLE
+    Unlock-RalphStory -StoryId 'US-001'
+#>
+function Unlock-RalphStory {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$StoryId,
+
+        [Parameter()]
+        [switch]$Force
+    )
+
+    $paths = Get-RalphPaths
+    $lockDir = Join-Path (Join-Path $paths.RalphDir 'locks') "$StoryId.lock"
+
+    if (-not (Test-Path $lockDir)) {
+        return $true  # Already unlocked
+    }
+
+    $ownerFile = Join-Path $lockDir 'owner.txt'
+    $owner = if (Test-Path $ownerFile) { Get-Content $ownerFile -Raw } else { '' }
+    $owner = $owner.Trim()
+
+    $instanceId = Get-RalphInstanceId
+
+    if ($Force -or $owner -eq $instanceId) {
+        try {
+            Remove-Item -Path $lockDir -Recurse -Force -ErrorAction Stop
+            Add-RalphInstanceLog "Released lock for $StoryId"
+            return $true
+        }
+        catch {
+            Write-Warning "Failed to release lock for $StoryId`: $_"
+            return $false
+        }
+    }
+    else {
+        Write-Warning "Cannot release lock for $StoryId - owned by $owner"
+        return $false
+    }
+}
+
+<#
+.SYNOPSIS
+    Tests if a story is currently locked.
+
+.DESCRIPTION
+    Checks if the lock directory exists for a story.
+
+.PARAMETER StoryId
+    The story ID to check.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if locked, $false if available.
+
+.EXAMPLE
+    if (Test-RalphStoryLocked -StoryId 'US-001') {
+        Write-Host "Story is locked"
+    }
+#>
+function Test-RalphStoryLocked {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$StoryId
+    )
+
+    $paths = Get-RalphPaths
+    $lockDir = Join-Path (Join-Path $paths.RalphDir 'locks') "$StoryId.lock"
+
+    return Test-Path $lockDir
+}
+
+<#
+.SYNOPSIS
+    Gets information about a story lock.
+
+.DESCRIPTION
+    Returns details about who holds a lock and when it was acquired.
+
+.PARAMETER StoryId
+    The story ID to check.
+
+.OUTPUTS
+    System.Collections.Hashtable or $null
+    Lock information including owner, timestamp, age, and isDead status.
+
+.EXAMPLE
+    $lock = Get-RalphStoryLock -StoryId 'US-001'
+    if ($lock) { Write-Host "Locked by: $($lock.Owner)" }
+#>
+function Get-RalphStoryLock {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$StoryId
+    )
+
+    $paths = Get-RalphPaths
+    $lockDir = Join-Path (Join-Path $paths.RalphDir 'locks') "$StoryId.lock"
+
+    if (-not (Test-Path $lockDir)) {
+        return $null
+    }
+
+    $ownerFile = Join-Path $lockDir 'owner.txt'
+    $timestampFile = Join-Path $lockDir 'timestamp.txt'
+
+    $owner = if (Test-Path $ownerFile) { (Get-Content $ownerFile -Raw).Trim() } else { 'unknown' }
+    $timestamp = if (Test-Path $timestampFile) { [long](Get-Content $timestampFile -Raw).Trim() } else { 0 }
+
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $age = $now - $timestamp
+
+    # Check if owner is dead
+    $isDead = $false
+    $ownerStatus = Get-RalphInstanceStatus -InstanceId $owner
+    if ($ownerStatus) {
+        $heartbeatAge = $now - $ownerStatus.lastHeartbeatEpoch
+        $isDead = ($heartbeatAge -gt 300) -and ($ownerStatus.state -notin @('terminated', 'completed'))
+    }
+
+    return @{
+        StoryId   = $StoryId
+        Owner     = $owner
+        Timestamp = $timestamp
+        Age       = $age
+        IsDead    = $isDead
+        IsStale   = ($age -gt 7200)  # 2 hours
+    }
+}
+
+<#
+.SYNOPSIS
+    Gets all current story locks.
+
+.DESCRIPTION
+    Returns information about all active locks.
+
+.OUTPUTS
+    System.Array
+    Array of lock information hashtables.
+
+.EXAMPLE
+    Get-RalphStoryLocks | ForEach-Object { Write-Host "$($_.StoryId): $($_.Owner)" }
+#>
+function Get-RalphStoryLocks {
+    [CmdletBinding()]
+    [OutputType([array])]
+    param()
+
+    $paths = Get-RalphPaths
+    $locksDir = Join-Path $paths.RalphDir 'locks'
+
+    if (-not (Test-Path $locksDir)) {
+        return @()
+    }
+
+    $locks = @()
+    Get-ChildItem -Path $locksDir -Directory -Filter '*.lock' | ForEach-Object {
+        $storyId = $_.Name -replace '\.lock$', ''
+        $lockInfo = Get-RalphStoryLock -StoryId $storyId
+        if ($lockInfo) {
+            $locks += $lockInfo
+        }
+    }
+
+    return $locks
+}
+
+<#
+.SYNOPSIS
+    Clears a stale lock for a specific story.
+
+.DESCRIPTION
+    Checks if a lock is stale (>2 hours) or owner is dead, and removes it.
+
+.PARAMETER StoryId
+    The story ID to check.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if lock was cleared, $false if lock is valid or doesn't exist.
+
+.EXAMPLE
+    Clear-RalphStaleLock -StoryId 'US-001'
+#>
+function Clear-RalphStaleLock {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$StoryId
+    )
+
+    $lock = Get-RalphStoryLock -StoryId $StoryId
+    if (-not $lock) {
+        return $false
+    }
+
+    $staleTimeout = [int]($env:RALPH_LOCK_TIMEOUT ?? 7200)  # 2 hours default
+
+    if ($lock.Age -gt $staleTimeout -or $lock.IsDead) {
+        $reason = if ($lock.IsDead) { "dead owner" } else { "stale ($($lock.Age)s)" }
+        Add-RalphInstanceLog "Clearing $reason lock for $StoryId (owner: $($lock.Owner))"
+        return Unlock-RalphStory -StoryId $StoryId -Force
+    }
+
+    return $false
+}
+
+<#
+.SYNOPSIS
+    Clears all stale locks.
+
+.DESCRIPTION
+    Finds and removes all locks that are stale or have dead owners.
+
+.OUTPUTS
+    System.Int32
+    Number of locks cleared.
+
+.EXAMPLE
+    $count = Clear-RalphStaleLocks
+    Write-Host "Cleared $count stale locks"
+#>
+function Clear-RalphStaleLocks {
+    [CmdletBinding()]
+    [OutputType([int])]
+    param()
+
+    $cleared = 0
+    Get-RalphStoryLocks | ForEach-Object {
+        if (Clear-RalphStaleLock -StoryId $_.StoryId) {
+            $cleared++
+        }
+    }
+
+    return $cleared
+}
+
+<#
+.SYNOPSIS
+    Releases all locks held by this instance.
+
+.DESCRIPTION
+    Finds and releases all locks owned by the current instance.
+
+.OUTPUTS
+    System.Int32
+    Number of locks released.
+
+.EXAMPLE
+    $count = Clear-RalphInstanceLocks
+    Write-Host "Released $count locks"
+#>
+function Clear-RalphInstanceLocks {
+    [CmdletBinding()]
+    [OutputType([int])]
+    param()
+
+    $instanceId = Get-RalphInstanceId
+    $released = 0
+
+    Get-RalphStoryLocks | Where-Object { $_.Owner -eq $instanceId } | ForEach-Object {
+        if (Unlock-RalphStory -StoryId $_.StoryId) {
+            $released++
+        }
+    }
+
+    return $released
+}
+
+# =============================================================================
+# PRD ATOMIC OPERATIONS (PS-003)
+# =============================================================================
+
+# Named mutex for cross-process PRD locking
+$script:PrdMutexName = 'Global\RalphPrdLock'
+
+<#
+.SYNOPSIS
+    Reads the PRD file with shared access.
+
+.DESCRIPTION
+    Reads prd.json using a brief lock to ensure consistency.
+
+.OUTPUTS
+    System.Management.Automation.PSObject
+    The PRD object.
+
+.EXAMPLE
+    $prd = Read-RalphPrdSafe
+#>
+function Read-RalphPrdSafe {
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    param()
+
+    $paths = Get-RalphPaths
+
+    # Brief lock just for reading
+    $mutex = New-Object System.Threading.Mutex($false, $script:PrdMutexName)
+    $acquired = $false
+
+    try {
+        $acquired = $mutex.WaitOne(5000)  # 5 second timeout
+        if (-not $acquired) {
+            Write-Warning "Timeout waiting for PRD read lock"
+            return $null
+        }
+
+        return Read-PrdJson
+    }
+    finally {
+        if ($acquired) {
+            $mutex.ReleaseMutex()
+        }
+        $mutex.Dispose()
+    }
+}
+
+<#
+.SYNOPSIS
+    Updates the PRD file atomically.
+
+.DESCRIPTION
+    Acquires exclusive lock, reads current PRD, applies update script block,
+    validates JSON, backs up, and writes. Retries on lock timeout.
+
+.PARAMETER UpdateScript
+    A script block that receives the PRD object and modifies it.
+    Return $true to proceed with save, $false to abort.
+
+.PARAMETER Description
+    Optional description of the update for logging.
+
+.PARAMETER MaxRetries
+    Maximum retry attempts for lock acquisition. Default 3.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if update succeeded, $false otherwise.
+
+.EXAMPLE
+    Update-RalphPrd -Description "Mark US-001 complete" -UpdateScript {
+        param($prd)
+        $story = $prd.userStories | Where-Object { $_.id -eq 'US-001' }
+        $story.passes = $true
+        return $true
+    }
+#>
+function Update-RalphPrd {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock]$UpdateScript,
+
+        [Parameter()]
+        [string]$Description = 'PRD update',
+
+        [Parameter()]
+        [int]$MaxRetries = 3
+    )
+
+    $paths = Get-RalphPaths
+    $prdFile = $paths.PrdFile
+    $backupFile = "$prdFile.bak"
+
+    $mutex = New-Object System.Threading.Mutex($false, $script:PrdMutexName)
+    $retry = 0
+
+    while ($retry -lt $MaxRetries) {
+        $acquired = $false
+        try {
+            $acquired = $mutex.WaitOne(5000)  # 5 second timeout
+            if (-not $acquired) {
+                $retry++
+                Add-RalphInstanceLog "PRD lock timeout, retry $retry/$MaxRetries"
+                Start-Sleep -Seconds 1
+                continue
+            }
+
+            # Read current PRD
+            $prd = Read-PrdJson
+            if (-not $prd) {
+                Write-Warning "Failed to read PRD"
+                return $false
+            }
+
+            # Apply update
+            $proceed = & $UpdateScript $prd
+            if (-not $proceed) {
+                return $false
+            }
+
+            # Backup before write
+            if (Test-Path $prdFile) {
+                Copy-Item -Path $prdFile -Destination $backupFile -Force
+            }
+
+            # Write to temp file first
+            $tempFile = "$prdFile.tmp"
+            $json = $prd | ConvertTo-Json -Depth 10
+            Set-Content -Path $tempFile -Value $json -Force -ErrorAction Stop
+
+            # Validate JSON
+            try {
+                $null = Get-Content $tempFile -Raw | ConvertFrom-Json -ErrorAction Stop
+            }
+            catch {
+                Write-Warning "PRD update produced invalid JSON: $_"
+                Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+                return $false
+            }
+
+            # Atomic rename
+            Move-Item -Path $tempFile -Destination $prdFile -Force -ErrorAction Stop
+
+            Add-RalphInstanceLog "PRD updated: $Description"
+            return $true
+        }
+        catch {
+            Write-Warning "PRD update failed: $_"
+            return $false
+        }
+        finally {
+            if ($acquired) {
+                $mutex.ReleaseMutex()
+            }
+        }
+    }
+
+    $mutex.Dispose()
+    Write-Warning "Failed to acquire PRD lock after $MaxRetries retries"
+    return $false
+}
+
+# =============================================================================
+# STORY CLAIMING FUNCTIONS (PS-004)
+# =============================================================================
+
+<#
+.SYNOPSIS
+    Gets the next unclaimed story by priority.
+
+.DESCRIPTION
+    Finds the highest priority story that is incomplete and not claimed
+    by another instance.
+
+.OUTPUTS
+    System.Management.Automation.PSObject or $null
+    The next available story object, or $null if none available.
+
+.EXAMPLE
+    $story = Get-RalphNextStory
+    if ($story) { Write-Host "Next: $($story.id) - $($story.title)" }
+#>
+function Get-RalphNextStory {
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    param()
+
+    $prd = Read-RalphPrdSafe
+    if (-not $prd -or -not $prd.userStories) {
+        return $null
+    }
+
+    # Get incomplete, unclaimed stories sorted by priority
+    $available = $prd.userStories |
+        Where-Object { $_.passes -eq $false } |
+        Where-Object { -not $_.claimedBy -or $_.claimedBy -eq '' } |
+        Sort-Object priority
+
+    foreach ($story in $available) {
+        # Check if locked
+        if (-not (Test-RalphStoryLocked -StoryId $story.id)) {
+            return $story
+        }
+    }
+
+    return $null
+}
+
+<#
+.SYNOPSIS
+    Claims a story for exclusive work.
+
+.DESCRIPTION
+    Acquires lock and updates PRD with claimedBy field.
+
+.PARAMETER StoryId
+    The story ID to claim.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if claim succeeded, $false otherwise.
+
+.EXAMPLE
+    if (Request-RalphStoryClaim -StoryId 'US-001') {
+        Write-Host "Claimed US-001!"
+    }
+#>
+function Request-RalphStoryClaim {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$StoryId
+    )
+
+    # Try to acquire lock
+    if (-not (Lock-RalphStory -StoryId $StoryId)) {
+        return $false
+    }
+
+    # Update PRD with claim
+    $instanceId = Get-RalphInstanceId
+    $result = Update-RalphPrd -Description "Claim $StoryId" -UpdateScript {
+        param($prd)
+        $story = $prd.userStories | Where-Object { $_.id -eq $StoryId }
+        if ($story) {
+            $story | Add-Member -NotePropertyName 'claimedBy' -NotePropertyValue $instanceId -Force
+            return $true
+        }
+        return $false
+    }
+
+    if (-not $result) {
+        # Failed to update PRD, release lock
+        Unlock-RalphStory -StoryId $StoryId
+        return $false
+    }
+
+    Add-RalphInstanceLog "Claimed story: $StoryId"
+    return $true
+}
+
+<#
+.SYNOPSIS
+    Releases a story claim.
+
+.DESCRIPTION
+    Releases lock and clears claimedBy in PRD.
+
+.PARAMETER StoryId
+    The story ID to release.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if release succeeded.
+
+.EXAMPLE
+    Release-RalphStoryClaim -StoryId 'US-001'
+#>
+function Release-RalphStoryClaim {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$StoryId
+    )
+
+    # Release lock
+    $null = Unlock-RalphStory -StoryId $StoryId
+
+    # Clear claimedBy in PRD
+    $null = Update-RalphPrd -Description "Release $StoryId" -UpdateScript {
+        param($prd)
+        $story = $prd.userStories | Where-Object { $_.id -eq $StoryId }
+        if ($story -and $story.claimedBy) {
+            $story.claimedBy = $null
+        }
+        return $true
+    }
+
+    Add-RalphInstanceLog "Released claim on $StoryId"
+    return $true
+}
+
+<#
+.SYNOPSIS
+    Claims the next available story.
+
+.DESCRIPTION
+    Finds and claims the next available story, with retry logic.
+
+.PARAMETER MaxRetries
+    Maximum retry attempts if no stories available. Default 5.
+
+.PARAMETER RetryDelay
+    Seconds to wait between retries. Default 30.
+
+.OUTPUTS
+    System.Management.Automation.PSObject or $null
+    The claimed story object, or $null if none available.
+
+.EXAMPLE
+    $story = Request-RalphNextStoryClaim
+    if ($story) { Write-Host "Working on: $($story.title)" }
+#>
+function Request-RalphNextStoryClaim {
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    param(
+        [Parameter()]
+        [int]$MaxRetries = 5,
+
+        [Parameter()]
+        [int]$RetryDelay = 30
+    )
+
+    $retry = 0
+    while ($retry -lt $MaxRetries) {
+        # Clean up any stale locks first
+        $null = Clear-RalphStaleLocks
+
+        $story = Get-RalphNextStory
+        if ($story) {
+            if (Request-RalphStoryClaim -StoryId $story.id) {
+                return $story
+            }
+            # Lock failed, try next story
+            continue
+        }
+
+        # No stories available
+        $retry++
+        if ($retry -lt $MaxRetries) {
+            Add-RalphInstanceLog "No available stories, waiting ${RetryDelay}s (retry $retry/$MaxRetries)"
+            Start-Sleep -Seconds $RetryDelay
+        }
+    }
+
+    Add-RalphInstanceLog "No stories available after $MaxRetries retries"
+    return $null
+}
+
+# =============================================================================
+# GIT BRANCH FUNCTIONS (PS-005)
+# =============================================================================
+
+# Script-level variable for current branch
+$script:CurrentStoryBranch = $null
+
+<#
+.SYNOPSIS
+    Creates a feature branch for a story.
+
+.DESCRIPTION
+    Creates a branch named ralph/{short-id}/{story-id} from the base branch
+    specified in the PRD.
+
+.PARAMETER StoryId
+    The story ID to create branch for.
+
+.OUTPUTS
+    System.String
+    The name of the created branch, or $null on failure.
+
+.EXAMPLE
+    $branch = New-RalphStoryBranch -StoryId 'US-001'
+#>
+function New-RalphStoryBranch {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$StoryId
+    )
+
+    $paths = Get-RalphPaths
+    $prd = Read-RalphPrdSafe
+    $baseBranch = if ($prd.branchName) { $prd.branchName } else { 'main' }
+    $shortId = Get-RalphShortId
+    $script:CurrentStoryBranch = "ralph/$shortId/$StoryId"
+
+    try {
+        Push-Location $paths.ProjectRoot
+
+        # Fetch latest
+        git fetch origin 2>$null
+
+        # Try to checkout base branch
+        $baseExists = git show-ref --verify --quiet "refs/heads/$baseBranch" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            git checkout $baseBranch 2>$null
+            git pull origin $baseBranch 2>$null
+        }
+        else {
+            # Try remote
+            $remoteExists = git show-ref --verify --quiet "refs/remotes/origin/$baseBranch" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                git checkout -b $baseBranch "origin/$baseBranch" 2>$null
+            }
+        }
+
+        # Check if story branch exists
+        $branchExists = git show-ref --verify --quiet "refs/heads/$($script:CurrentStoryBranch)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            git checkout $script:CurrentStoryBranch
+            Add-RalphInstanceLog "Checked out existing branch: $($script:CurrentStoryBranch)"
+        }
+        else {
+            git checkout -b $script:CurrentStoryBranch
+            Add-RalphInstanceLog "Created new branch: $($script:CurrentStoryBranch)"
+        }
+
+        return $script:CurrentStoryBranch
+    }
+    catch {
+        Write-Warning "Failed to create story branch: $_"
+        return $null
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+<#
+.SYNOPSIS
+    Merges a story branch back to the base branch.
+
+.DESCRIPTION
+    Merges the story branch with --no-ff and cleans up.
+
+.PARAMETER StoryId
+    The story ID whose branch to merge.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if merge succeeded.
+
+.EXAMPLE
+    Merge-RalphStoryBranch -StoryId 'US-001'
+#>
+function Merge-RalphStoryBranch {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$StoryId
+    )
+
+    if (-not $script:CurrentStoryBranch) {
+        return $true
+    }
+
+    $paths = Get-RalphPaths
+    $prd = Read-RalphPrdSafe
+    $baseBranch = if ($prd.branchName) { $prd.branchName } else { 'main' }
+    $shortId = Get-RalphShortId
+
+    try {
+        Push-Location $paths.ProjectRoot
+
+        # Checkout base branch
+        $result = git checkout $baseBranch 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Add-RalphInstanceLog "WARNING: Could not checkout $baseBranch for merge"
+            return $false
+        }
+
+        # Pull latest
+        git pull origin $baseBranch 2>$null
+
+        # Merge with --no-ff
+        $mergeResult = git merge --no-ff $script:CurrentStoryBranch -m "Merge $StoryId from instance $shortId" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Add-RalphInstanceLog "ERROR: Merge conflict! Manual resolution required."
+            git merge --abort 2>$null
+            return $false
+        }
+
+        Add-RalphInstanceLog "Merged $($script:CurrentStoryBranch) into $baseBranch"
+
+        # Delete the feature branch
+        git branch -d $script:CurrentStoryBranch 2>$null
+        Add-RalphInstanceLog "Deleted branch: $($script:CurrentStoryBranch)"
+
+        $script:CurrentStoryBranch = $null
+        return $true
+    }
+    catch {
+        Write-Warning "Failed to merge story branch: $_"
+        return $false
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+<#
+.SYNOPSIS
+    Gets the current story branch name.
+
+.OUTPUTS
+    System.String
+    The current story branch name, or $null.
+
+.EXAMPLE
+    $branch = Get-RalphCurrentBranch
+#>
+function Get-RalphCurrentBranch {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    return $script:CurrentStoryBranch
+}
+
+<#
+.SYNOPSIS
+    Cleans up merged story branches.
+
+.DESCRIPTION
+    Removes local branches matching ralph/*/* pattern that have been merged.
+
+.OUTPUTS
+    System.Int32
+    Number of branches cleaned up.
+
+.EXAMPLE
+    $count = Clear-RalphMergedBranches
+#>
+function Clear-RalphMergedBranches {
+    [CmdletBinding()]
+    [OutputType([int])]
+    param()
+
+    $paths = Get-RalphPaths
+    $cleaned = 0
+
+    try {
+        Push-Location $paths.ProjectRoot
+
+        # Get merged branches matching ralph pattern
+        $branches = git branch --merged | Where-Object { $_ -match 'ralph/[^/]+/[^/]+' }
+
+        foreach ($branch in $branches) {
+            $branchName = $branch.Trim().TrimStart('* ')
+            if ($branchName -ne (git rev-parse --abbrev-ref HEAD)) {
+                git branch -d $branchName 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    $cleaned++
+                    Add-RalphInstanceLog "Cleaned up merged branch: $branchName"
+                }
+            }
+        }
+
+        return $cleaned
+    }
+    catch {
+        Write-Warning "Failed to clean merged branches: $_"
+        return 0
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+# =============================================================================
+# GRACEFUL SHUTDOWN (PS-007)
+# =============================================================================
+
+# Script-level cleanup state
+$script:CleanupRegistered = $false
+$script:CurrentStoryId = $null
+
+<#
+.SYNOPSIS
+    Registers cleanup handler for graceful shutdown.
+
+.DESCRIPTION
+    Sets up handlers to release locks and update status on script termination.
+
+.EXAMPLE
+    Register-RalphCleanup
+#>
+function Register-RalphCleanup {
+    [CmdletBinding()]
+    param()
+
+    if ($script:CleanupRegistered) {
+        return
+    }
+
+    # Register for process exit
+    $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
+        Invoke-RalphCleanup
+    } -SupportEvent
+
+    $script:CleanupRegistered = $true
+}
+
+<#
+.SYNOPSIS
+    Performs cleanup on shutdown.
+
+.DESCRIPTION
+    Releases locks, updates status, and stashes uncommitted changes.
+
+.EXAMPLE
+    Invoke-RalphCleanup
+#>
+function Invoke-RalphCleanup {
+    [CmdletBinding()]
+    param()
+
+    Add-RalphInstanceLog "Shutting down instance..."
+
+    # Update status
+    try {
+        Update-RalphStatus -State 'terminated' -CurrentStory $script:CurrentStoryId
+    }
+    catch {
+        Write-Warning "Failed to update status: $_"
+    }
+
+    # Release all locks
+    try {
+        $released = Clear-RalphInstanceLocks
+        Add-RalphInstanceLog "Released $released locks"
+    }
+    catch {
+        Write-Warning "Failed to release locks: $_"
+    }
+
+    # Stash uncommitted changes
+    try {
+        $paths = Get-RalphPaths
+        Push-Location $paths.ProjectRoot
+
+        $hasChanges = git diff --quiet 2>$null
+        $hasStagedChanges = git diff --cached --quiet 2>$null
+
+        if ($LASTEXITCODE -ne 0) {
+            $shortId = Get-RalphShortId
+            git stash push -m "Ralph instance $shortId shutdown stash" 2>$null
+            Add-RalphInstanceLog "Stashed uncommitted changes"
+        }
+        else {
+            Add-RalphInstanceLog "No uncommitted changes"
+        }
+
+        Pop-Location
+    }
+    catch {
+        Write-Warning "Failed to stash changes: $_"
+    }
+
+    Add-RalphInstanceLog "Cleanup complete. Goodbye!"
+}
+
+<#
+.SYNOPSIS
+    Sets the current story ID for cleanup purposes.
+
+.PARAMETER StoryId
+    The story ID being worked on.
+
+.EXAMPLE
+    Set-RalphCurrentStory -StoryId 'US-001'
+#>
+function Set-RalphCurrentStory {
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [string]$StoryId
+    )
+
+    $script:CurrentStoryId = $StoryId
+}
+
 # Export all public functions
 Export-ModuleMember -Function @(
     'Get-RalphPaths'
@@ -395,4 +1869,38 @@ Export-ModuleMember -Function @(
     'Get-PrdStatus'
     'Write-ColoredOutput'
     'Add-LogEntry'
+    # Multi-instance functions (PS-001)
+    'Get-RalphInstanceId'
+    'Get-RalphShortId'
+    'New-RalphInstanceDirectory'
+    'Update-RalphStatus'
+    'Get-RalphInstanceStatus'
+    'Get-RalphInstances'
+    'Add-RalphInstanceLog'
+    # Locking functions (PS-002)
+    'Lock-RalphStory'
+    'Unlock-RalphStory'
+    'Test-RalphStoryLocked'
+    'Get-RalphStoryLock'
+    'Get-RalphStoryLocks'
+    'Clear-RalphStaleLock'
+    'Clear-RalphStaleLocks'
+    'Clear-RalphInstanceLocks'
+    # PRD atomic functions (PS-003)
+    'Read-RalphPrdSafe'
+    'Update-RalphPrd'
+    # Story claiming functions (PS-004)
+    'Get-RalphNextStory'
+    'Request-RalphStoryClaim'
+    'Release-RalphStoryClaim'
+    'Request-RalphNextStoryClaim'
+    # Git branch functions (PS-005)
+    'New-RalphStoryBranch'
+    'Merge-RalphStoryBranch'
+    'Get-RalphCurrentBranch'
+    'Clear-RalphMergedBranches'
+    # Cleanup functions (PS-007)
+    'Register-RalphCleanup'
+    'Invoke-RalphCleanup'
+    'Set-RalphCurrentStory'
 )

@@ -1,0 +1,295 @@
+{
+  "featureName": "PowerShell Multi-Instance Port & Cross-Platform Test Suite",
+  "branchName": "ralph/powershell-multi-instance",
+  "description": "Port all multi-instance Ralph features to PowerShell 7+ for cross-platform compatibility. Create comprehensive test suites for both Bash and PowerShell implementations using Pester (PowerShell) and bash test scripts.",
+  "userStories": [
+    {
+      "id": "PS-001",
+      "title": "PowerShell Utility Module Extension",
+      "priority": 1,
+      "acceptanceCriteria": [
+        "Extend RalphUtils.psm1 with multi-instance helper functions",
+        "Add Get-RalphInstanceId function generating {user}-{hostname}-{pid}-{timestamp}",
+        "Add Get-RalphShortId function returning first 8 characters",
+        "Add New-RalphInstanceDirectory function creating instances/{id}/ structure",
+        "Add Update-RalphStatus function writing status.json atomically",
+        "All functions have proper PowerShell help comments",
+        "Tests: Import-Module succeeds and functions are available"
+      ],
+      "passes": false,
+      "notes": "Foundation module. Use $env:USERNAME, $env:COMPUTERNAME, $PID, Get-Date for ID generation."
+    },
+    {
+      "id": "PS-002",
+      "title": "PowerShell File Locking Implementation",
+      "priority": 2,
+      "acceptanceCriteria": [
+        "Add Lock-RalphStory function using atomic directory creation",
+        "Add Unlock-RalphStory function to release locks",
+        "Add Test-RalphStoryLocked function to check lock status",
+        "Add Get-RalphStaleLocks function finding locks older than threshold",
+        "Add Clear-RalphStaleLocks function removing stale locks",
+        "Locks stored in locks/{story-id}.lock/ with owner.txt and timestamp.txt",
+        "Tests: concurrent lock attempts, only one succeeds"
+      ],
+      "passes": false,
+      "notes": "Use New-Item -ItemType Directory for atomic creation. ErrorAction Stop on failure means lock held."
+    },
+    {
+      "id": "PS-003",
+      "title": "PowerShell PRD Atomic Updates",
+      "priority": 3,
+      "acceptanceCriteria": [
+        "Add Lock-RalphPrd function using .NET Mutex for cross-process locking",
+        "Add Update-RalphPrd function with lock, read, modify, write, unlock pattern",
+        "Add Read-RalphPrdSafe function with shared lock for reading",
+        "Backup prd.json to prd.json.bak before each write",
+        "Validate JSON after write using ConvertFrom-Json",
+        "5-second timeout with 3 retries on lock acquisition",
+        "Tests: concurrent updates don't corrupt JSON"
+      ],
+      "passes": false,
+      "notes": "Use [System.Threading.Mutex] for cross-process synchronization. Named mutex 'Global\\RalphPrdLock'."
+    },
+    {
+      "id": "PS-004",
+      "title": "PowerShell Story Claiming",
+      "priority": 4,
+      "acceptanceCriteria": [
+        "Add Get-RalphNextStory function finding unclaimed incomplete stories",
+        "Add Request-RalphStoryClaim function attempting lock + PRD update",
+        "Add Release-RalphStoryClaim function releasing lock + clearing claimedBy",
+        "Stories claimed by priority order (lowest first)",
+        "If no stories available, wait 30s and retry (max 5 retries)",
+        "Log claims with instance ID: [SHORT_ID] Claimed PS-XXX",
+        "Tests: two instances claim different stories"
+      ],
+      "passes": false,
+      "notes": "Integrate locking and PRD update functions. Handle race conditions gracefully."
+    },
+    {
+      "id": "PS-005",
+      "title": "PowerShell Feature Branch Isolation",
+      "priority": 5,
+      "acceptanceCriteria": [
+        "Add New-RalphStoryBranch function creating ralph/{short-id}/{story-id} branch",
+        "Add Merge-RalphStoryBranch function merging with --no-ff",
+        "Add Remove-RalphStoryBranch function cleaning up merged branches",
+        "Handle merge conflicts by aborting and logging error",
+        "Fetch and pull before branch operations",
+        "Tests: branch created, commits isolated, merge succeeds"
+      ],
+      "passes": false,
+      "notes": "Use git commands via Invoke-Expression or Start-Process. Handle non-zero exit codes."
+    },
+    {
+      "id": "PS-006",
+      "title": "PowerShell Main Script Multi-Instance Update",
+      "priority": 6,
+      "acceptanceCriteria": [
+        "Update ralph.ps1 to generate and use instance ID",
+        "Create instance directory on startup with init function",
+        "Write logs to instances/{id}/ralph.log",
+        "Write status.json with heartbeat on each iteration",
+        "Claim story before working, release on completion",
+        "Create feature branch for each story",
+        "Merge branch on story completion",
+        "Tests: ralph.ps1 creates instance directory and status.json"
+      ],
+      "passes": false,
+      "notes": "Integrate all module functions into main loop. Maintain backward compatibility with single-instance mode."
+    },
+    {
+      "id": "PS-007",
+      "title": "PowerShell Graceful Shutdown",
+      "priority": 7,
+      "acceptanceCriteria": [
+        "Register handler for Ctrl+C using [Console]::TreatControlCAsInput or try/finally",
+        "On shutdown: release all held story locks",
+        "On shutdown: update status.json to state=terminated",
+        "On shutdown: git stash any uncommitted changes",
+        "On shutdown: log termination summary",
+        "Tests: send termination signal, verify locks released"
+      ],
+      "passes": false,
+      "notes": "PowerShell signal handling differs from Bash. Use try/finally for cleanup guarantee."
+    },
+    {
+      "id": "PS-008",
+      "title": "ralph-locks.ps1 Script",
+      "priority": 8,
+      "acceptanceCriteria": [
+        "Create ralph-locks.ps1 with Get-Help documentation",
+        "Implement Show-LockStatus command displaying all locks",
+        "Implement Remove-Lock command force-releasing specific lock",
+        "Implement Remove-AllLocks command releasing all locks",
+        "Implement Clear-StaleLocks command removing old locks",
+        "Color-coded output: green=valid, yellow=stale, red=dead owner",
+        "Tests: all commands run without error"
+      ],
+      "passes": false,
+      "notes": "Mirror bash ralph-locks.sh functionality. Use PowerShell cmdlet naming conventions."
+    },
+    {
+      "id": "PS-009",
+      "title": "ralph-cleanup.ps1 Script",
+      "priority": 9,
+      "acceptanceCriteria": [
+        "Create ralph-cleanup.ps1 with -Dead, -Old, -All, -WhatIf parameters",
+        "Dead instances: no heartbeat > 5 minutes",
+        "Old instances: older than $env:RALPH_CLEANUP_TTL days (default 7)",
+        "Display summary of instances by state",
+        "-WhatIf shows what would be deleted without deleting",
+        "Tests: cleanup commands work correctly"
+      ],
+      "passes": false,
+      "notes": "Use PowerShell -WhatIf pattern for dry-run. Check lastHeartbeatEpoch in status.json."
+    },
+    {
+      "id": "PS-010",
+      "title": "ralph-parallel.ps1 Script",
+      "priority": 10,
+      "acceptanceCriteria": [
+        "Create ralph-parallel.ps1 with Start, Stop, Status commands",
+        "Start -Count N launches N instances as background jobs",
+        "Jobs tracked in instances/running-jobs.json",
+        "Stop sends graceful termination to all jobs",
+        "Status shows running job count and details",
+        "Default count = (CPU cores / 2), minimum 1",
+        "Tests: parallel launch creates multiple instances"
+      ],
+      "passes": false,
+      "notes": "Use Start-Job for background execution. Store job IDs for management."
+    },
+    {
+      "id": "PS-011",
+      "title": "ralph-dashboard.ps1 Script",
+      "priority": 11,
+      "acceptanceCriteria": [
+        "Create ralph-dashboard.ps1 with auto-refresh display",
+        "Show table: Instance ID | Story | Status | Iteration | Runtime",
+        "Show PRD progress bar using Unicode block characters",
+        "Color coding: green=working, yellow=idle, red=error, gray=dead",
+        "Refresh every 2 seconds (configurable with -RefreshInterval)",
+        "Exit with Q key or Ctrl+C",
+        "Tests: dashboard displays without error"
+      ],
+      "passes": false,
+      "notes": "Use Write-Host with -ForegroundColor. Clear-Host for refresh. Read-Host -Timeout for key input."
+    },
+    {
+      "id": "PS-012",
+      "title": "Pester Test Suite - Core Functions",
+      "priority": 12,
+      "acceptanceCriteria": [
+        "Create tests/RalphMultiInstance.Tests.ps1 using Pester 5+",
+        "Test Get-RalphInstanceId returns valid format",
+        "Test Lock-RalphStory acquires lock atomically",
+        "Test concurrent lock attempts - only one succeeds",
+        "Test Update-RalphPrd with concurrent writes",
+        "Test stale lock detection and cleanup",
+        "All tests pass: Invoke-Pester returns 0 failures"
+      ],
+      "passes": false,
+      "notes": "Use Pester Describe/Context/It structure. Mock filesystem for isolation."
+    },
+    {
+      "id": "PS-013",
+      "title": "Pester Test Suite - Scripts",
+      "priority": 13,
+      "acceptanceCriteria": [
+        "Create tests/RalphScripts.Tests.ps1 for script testing",
+        "Test ralph-locks.ps1 all commands",
+        "Test ralph-cleanup.ps1 with -WhatIf",
+        "Test ralph-parallel.ps1 status command",
+        "Test ralph-dashboard.ps1 --help",
+        "Test ralph.ps1 instance initialization",
+        "All tests pass with Invoke-Pester"
+      ],
+      "passes": false,
+      "notes": "Test scripts can be invoked. Use TestDrive: for temp files."
+    },
+    {
+      "id": "PS-014",
+      "title": "Bash Test Suite - Core Functions",
+      "priority": 14,
+      "acceptanceCriteria": [
+        "Extend tests/test-multi-instance.sh with more tests",
+        "Test flock PRD locking under concurrent writes",
+        "Test story claiming with simulated instances",
+        "Test git branch creation and merge",
+        "Test signal handling and cleanup",
+        "Test dead instance detection",
+        "All tests pass: exit code 0"
+      ],
+      "passes": false,
+      "notes": "Use subshells to simulate concurrent instances. Check file contents after operations."
+    },
+    {
+      "id": "PS-015",
+      "title": "Bash Test Suite - Scripts",
+      "priority": 15,
+      "acceptanceCriteria": [
+        "Create tests/test-scripts.sh for script testing",
+        "Test ralph-locks.sh all commands",
+        "Test ralph-cleanup.sh --dry-run",
+        "Test ralph-parallel.sh status",
+        "Test ralph-dashboard.sh --help",
+        "Test ralph.sh creates instance directory",
+        "All tests pass: exit code 0"
+      ],
+      "passes": false,
+      "notes": "Integration tests for all helper scripts."
+    },
+    {
+      "id": "PS-016",
+      "title": "Cross-Platform Integration Tests",
+      "priority": 16,
+      "acceptanceCriteria": [
+        "Create tests/test-cross-platform.ps1 runnable on any OS",
+        "Test that Bash and PowerShell create compatible lock formats",
+        "Test that Bash and PowerShell can read each other's status.json",
+        "Test that PRD updates from both are compatible",
+        "Test instance ID format is consistent",
+        "Document any platform-specific behaviors",
+        "Tests pass on Linux with both bash and pwsh"
+      ],
+      "passes": false,
+      "notes": "Ensure implementations are interoperable. Same lock format, same JSON structure."
+    },
+    {
+      "id": "PS-017",
+      "title": "Documentation Update",
+      "priority": 17,
+      "acceptanceCriteria": [
+        "Update docs/multi-instance.md with PowerShell commands",
+        "Add PowerShell examples alongside Bash examples",
+        "Document platform differences if any",
+        "Add troubleshooting for PowerShell-specific issues",
+        "Update README.md with cross-platform instructions",
+        "Add docs/powershell-guide.md with detailed PS instructions"
+      ],
+      "passes": false,
+      "notes": "Comprehensive docs for both platforms."
+    }
+  ],
+  "qualityChecks": {
+    "pester": "Invoke-Pester -Path ./scripts/ralph/tests/ -PassThru",
+    "bash_tests": "bash tests/test-multi-instance.sh && bash tests/test-scripts.sh",
+    "syntax_ps": "Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object { $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$null) }",
+    "syntax_bash": "find . -name '*.sh' -exec bash -n {} \\;"
+  },
+  "techStack": {
+    "powershell": "7.0+",
+    "bash": "4.0+",
+    "testing_ps": "Pester 5+",
+    "testing_bash": "Native bash",
+    "locking_ps": ".NET Mutex + atomic mkdir",
+    "locking_bash": "flock + atomic mkdir"
+  },
+  "compatibility": {
+    "lockFormat": "locks/{story-id}.lock/ directory with owner.txt, timestamp.txt",
+    "statusFormat": "JSON with instanceId, shortId, state, currentStory, lastHeartbeatEpoch",
+    "prdFormat": "Existing prd.json with claimedBy field added to stories"
+  }
+}
