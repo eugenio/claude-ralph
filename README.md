@@ -597,10 +597,32 @@ Ralph provides full cross-platform compatibility with both Bash and PowerShell i
 | Dashboard | `ralph-dashboard.sh` | `ralph-dashboard.ps1` |
 | Lock Management | `ralph-locks.sh` | `ralph-locks.ps1` |
 | Cleanup | `ralph-cleanup.sh` | `ralph-cleanup.ps1` |
+| Status | `ralph-status.sh` | `ralph-status.ps1` |
 | PRD Locking | flock | .NET Mutex |
 | Story Locks | mkdir (atomic) | mkdir (atomic) |
 
 Both implementations share the same file formats (status.json, lock directories, PRD), so you can mix Bash and PowerShell instances in the same project.
+
+### Bash vs PowerShell Differences
+
+While both implementations are functionally equivalent, there are intentional differences to match platform conventions:
+
+| Aspect | Bash | PowerShell |
+|--------|------|------------|
+| Script Location | Project root (`./ralph-*.sh`) | `scripts/ralph/` directory |
+| Flag Style | `--dead`, `--old`, `--dry-run` | `-Dead`, `-Old`, `-WhatIf` |
+| Command Style | `release-all` (lowercase) | `ReleaseAll` (PascalCase) |
+| Release Flag | `release <story-id>` | `Release -StoryId <story-id>` |
+| Shared Library | `source ralph-utils.sh` | `Import-Module RalphUtils.psm1` |
+
+**Data Format Compatibility:**
+- Lock files: Both use `owner` and `timestamp` files in `.lock/` directories
+- Instance status: Both read/write identical `status.json` format
+- PRD format: Both parse the same `prd.json` structure
+
+**Empty PRD Handling:**
+- Bash: May fail on division by zero for progress calculation
+- PowerShell: Handles gracefully with 0% progress display
 
 See [PowerShell Guide](docs/powershell-guide.md) for detailed PowerShell usage.
 
