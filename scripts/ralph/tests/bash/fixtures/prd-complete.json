@@ -1,0 +1,47 @@
+{
+  "featureName": "Complete Test Feature",
+  "branchName": "test/complete-feature",
+  "description": "A PRD with all stories completed",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "First story - done",
+      "priority": 1,
+      "acceptanceCriteria": [
+        "Criterion 1 for US-001"
+      ],
+      "passes": true,
+      "notes": "Completed in iteration 1",
+      "claimedBy": null
+    },
+    {
+      "id": "US-002",
+      "title": "Second story - done",
+      "priority": 2,
+      "acceptanceCriteria": [
+        "Criterion 1 for US-002"
+      ],
+      "passes": true,
+      "notes": "Completed in iteration 2",
+      "claimedBy": null
+    },
+    {
+      "id": "US-003",
+      "title": "Third story - done",
+      "priority": 3,
+      "acceptanceCriteria": [
+        "Criterion 1 for US-003"
+      ],
+      "passes": true,
+      "notes": "Completed in iteration 3",
+      "claimedBy": null
+    }
+  ],
+  "qualityChecks": {
+    "lint": "shellcheck scripts/ralph/*.sh",
+    "test": "bats scripts/ralph/tests/bash/*.bats"
+  },
+  "techStack": {
+    "shell": "Bash 4+"
+  }
+}
