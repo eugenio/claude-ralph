@@ -1,0 +1,90 @@
+name: PowerShell Tests
+
+on:
+  push:
+    branches: ['*']
+    paths:
+      - 'scripts/ralph/**/*.ps1'
+      - 'scripts/ralph/**/*.psm1'
+      - '.github/workflows/test-powershell.yml'
+  pull_request:
+    branches: ['*']
+    paths:
+      - 'scripts/ralph/**/*.ps1'
+      - 'scripts/ralph/**/*.psm1'
+      - '.github/workflows/test-powershell.yml'
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PowerShell
+        shell: pwsh
+        run: |
+          $PSVersionTable.PSVersion
+          Write-Host "PowerShell version: $($PSVersionTable.PSVersion)"
+
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name Pester -MinimumVersion 5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+          Get-Module -Name Pester -ListAvailable | Select-Object -First 1
+
+      - name: Verify module can be imported
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module ./scripts/ralph/RalphUtils.psm1 -Verbose
+          Write-Host "Module imported successfully"
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          $config = New-PesterConfiguration
+          $config.Run.Path = './scripts/ralph/tests/'
+          $config.Run.Exit = $true
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputFormat = 'JUnitXml'
+          $config.TestResult.OutputPath = './test-results.xml'
+          $config.Output.Verbosity = 'Detailed'
+          $config.CodeCoverage.Enabled = $true
+          $config.CodeCoverage.Path = @(
+            './scripts/ralph/RalphUtils.psm1',
+            './scripts/ralph/ralph.ps1',
+            './scripts/ralph/ralph-once.ps1',
+            './scripts/ralph/ralph-status.ps1',
+            './scripts/ralph/install-skills.ps1'
+          )
+          $config.CodeCoverage.OutputFormat = 'JaCoCo'
+          $config.CodeCoverage.OutputPath = './coverage.xml'
+
+          Invoke-Pester -Configuration $config
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            ./test-results.xml
+            ./coverage.xml
+          retention-days: 30
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Pester Tests (${{ matrix.os }})
+          path: ./test-results.xml
+          reporter: java-junit
+          fail-on-error: true

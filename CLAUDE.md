@@ -4,7 +4,7 @@ An autonomous AI agent loop that runs Claude Code repeatedly until all PRD items
 Each iteration is a fresh Claude Code instance with clean context.
 Memory persists via git history, `progress.txt`, and `prd.json`.
 
-## Quick Start
+## Quick Start (Bash)
 
 ```bash
 # 1. Install ralph in scripts directory
@@ -23,22 +23,86 @@ cp scripts/ralph/prd.json.example scripts/ralph/prd.json
 ./scripts/ralph/ralph.sh [max_iterations]
 ```
 
+## Quick Start (PowerShell)
+
+Ralph includes cross-platform PowerShell 7+ equivalents for all bash scripts.
+
+### Prerequisites
+
+PowerShell 7+ is required. Install it based on your platform:
+
+```bash
+# macOS (Homebrew)
+brew install powershell/tap/powershell
+
+# Ubuntu/Debian
+sudo apt-get update && sudo apt-get install -y powershell
+
+# Windows (winget)
+winget install Microsoft.PowerShell
+
+# Or download from: https://github.com/PowerShell/PowerShell/releases
+```
+
+Verify installation:
+```powershell
+pwsh --version  # Should show 7.x or higher
+```
+
+### Running Ralph with PowerShell
+
+```powershell
+# 1. Install ralph in scripts directory
+New-Item -ItemType Directory -Path scripts -Force
+Set-Location scripts
+git clone https://github.com/RobinOppenstam/claude-ralph ralph
+Set-Location ..
+
+# 2. (Optional) Install skills globally for interactive use
+pwsh ./scripts/ralph/install-skills.ps1
+
+# 3. Create your prd.json (copy from example and edit)
+Copy-Item ./scripts/ralph/prd.json.example ./scripts/ralph/prd.json
+
+# 4. Run ralph from project root
+pwsh ./scripts/ralph/ralph.ps1 -MaxIterations 10
+```
+
+### Windows Execution Policy
+
+On Windows, you may need to allow script execution:
+
+```powershell
+# Check current policy
+Get-ExecutionPolicy
+
+# Allow local scripts (run as Administrator or for current user)
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
 ## File Structure
 
 ```
 your-project/
 ├── scripts/
 │   └── ralph/                    # Ralph files (self-contained)
-│       ├── ralph.sh             # Main loop script
-│       ├── ralph-once.sh        # Single iteration script
-│       ├── ralph-status.sh      # Status checker
+│       ├── ralph.sh             # Main loop script (Bash)
+│       ├── ralph.ps1            # Main loop script (PowerShell)
+│       ├── ralph-once.sh        # Single iteration script (Bash)
+│       ├── ralph-once.ps1       # Single iteration script (PowerShell)
+│       ├── ralph-status.sh      # Status checker (Bash)
+│       ├── ralph-status.ps1     # Status checker (PowerShell)
+│       ├── install-skills.sh    # Skill installer (Bash)
+│       ├── install-skills.ps1   # Skill installer (PowerShell)
+│       ├── RalphUtils.psm1      # Shared PowerShell module
 │       ├── prompt.md            # Instructions for each iteration
 │       ├── prd.json             # User stories with passes status
 │       ├── progress.txt         # Append-only learnings log
 │       ├── ralph.log            # Execution log
 │       ├── .last-branch         # Current branch tracker
 │       ├── archive/             # Previous runs
-│       └── skills/              # Claude Code skills
+│       ├── skills/              # Claude Code skills
+│       └── tests/               # Pester test suites
 │
 └── [Project root]                # Your project files
     ├── src/                      # Source code (created by Ralph)
@@ -87,6 +151,8 @@ These are automatically read by Claude Code in subsequent runs.
 
 Run these from your project root:
 
+### Bash Commands
+
 ```bash
 # Run Ralph loop
 ./scripts/ralph/ralph.sh 10
@@ -109,6 +175,32 @@ cat scripts/ralph/ralph.log
 git log --oneline -10
 ```
 
+### PowerShell Commands
+
+```powershell
+# Run Ralph loop
+pwsh ./scripts/ralph/ralph.ps1 -MaxIterations 10
+
+# Run single iteration
+pwsh ./scripts/ralph/ralph-once.ps1
+
+# Check status
+pwsh ./scripts/ralph/ralph-status.ps1
+# Or manually
+Get-Content ./scripts/ralph/prd.json | ConvertFrom-Json |
+    Select-Object -ExpandProperty userStories |
+    Select-Object id, title, passes
+
+# See learnings
+Get-Content ./scripts/ralph/progress.txt
+
+# Check execution log
+Get-Content ./scripts/ralph/ralph.log
+
+# Check git history
+git log --oneline -10
+```
+
 ## Skills
 
 Ralph includes three Claude Code skills for interactive use:
@@ -116,8 +208,11 @@ Ralph includes three Claude Code skills for interactive use:
 ### Installing Skills Globally
 
 ```bash
-# One-time setup (makes skills available in all projects)
+# Bash
 ./scripts/ralph/install-skills.sh
+
+# PowerShell
+pwsh ./scripts/ralph/install-skills.ps1
 ```
 
 This installs skills to `~/.claude/skills/` so you can use them in any project.
@@ -157,6 +252,87 @@ Skills are automatically available when running ralph autonomously. Global insta
 - Update to the latest ralph.sh from the repo
 - The fix adds a double-check: even if the tag is detected, ralph now verifies the PRD before exiting
 
+### PowerShell Troubleshooting
+
+**"cannot be loaded because running scripts is disabled"**
+
+Windows restricts script execution by default. Fix with:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+**"The term 'pwsh' is not recognized"**
+
+PowerShell 7+ is not installed or not in PATH. Install from:
+- https://github.com/PowerShell/PowerShell/releases
+- Or use your package manager (brew, apt, winget)
+
+**"Module 'Pester' not found"**
+
+Install Pester for running tests:
+```powershell
+Install-Module -Name Pester -MinimumVersion 5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+```
+
+**"Module 'RalphUtils' not found"**
+
+The script must be run from the project root directory where `scripts/ralph/` exists. The scripts use `$PSScriptRoot` to locate the module.
+
+**Tests fail with "access denied" or permission errors**
+
+On Windows, ensure you have write access to the target directories. On Linux/macOS, check file permissions with `ls -la`.
+
+## Running Pester Tests
+
+Ralph includes comprehensive Pester test suites for all PowerShell scripts.
+
+### Installing Pester
+
+```powershell
+# Install Pester 5.x (required)
+Install-Module -Name Pester -MinimumVersion 5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+
+# Verify installation
+Get-Module -ListAvailable Pester
+```
+
+### Running All Tests
+
+```powershell
+# Run all tests from project root
+pwsh -Command "Invoke-Pester ./scripts/ralph/tests/ -Output Detailed"
+
+# Run with code coverage
+pwsh -Command "Invoke-Pester ./scripts/ralph/tests/ -CodeCoverage ./scripts/ralph/*.ps1 -Output Detailed"
+```
+
+### Running Individual Test Files
+
+```powershell
+# Test the shared module
+Invoke-Pester ./scripts/ralph/tests/RalphUtils.Tests.ps1 -Output Detailed
+
+# Test the main loop script
+Invoke-Pester ./scripts/ralph/tests/ralph.Tests.ps1 -Output Detailed
+
+# Test the single iteration script
+Invoke-Pester ./scripts/ralph/tests/ralph-once.Tests.ps1 -Output Detailed
+
+# Test the status checker
+Invoke-Pester ./scripts/ralph/tests/ralph-status.Tests.ps1 -Output Detailed
+
+# Test the skill installer
+Invoke-Pester ./scripts/ralph/tests/install-skills.Tests.ps1 -Output Detailed
+```
+
+### Test Structure
+
+Each test file covers:
+- **Script structure validation** - Functions defined, proper imports
+- **Unit tests** - Individual function behavior with mocked dependencies
+- **Edge cases** - Missing files, invalid input, empty data
+- **Integration patterns** - Module interactions, path handling
+
 ## Tips
 
 - **Start small**: Begin with 3-4 iterations, review, then continue
@@ -164,4 +340,6 @@ Skills are automatically available when running ralph autonomously. Global insta
 - **Include quality checks**: Always have typecheck/test in criteria
 - **Browser verify UI**: Frontend stories need visual verification
 - **Review progress.txt**: See what Ralph learned
-- **Install skills globally**: Run `./scripts/ralph/install-skills.sh` once for better interactive experience
+- **Install skills globally**: Run `./scripts/ralph/install-skills.sh` (or `.ps1`) once for better interactive experience
+- **Cross-platform**: Use PowerShell scripts on Windows, bash or PowerShell on macOS/Linux
+- **Use pwsh**: Always invoke PowerShell scripts with `pwsh` command for cross-platform compatibility
