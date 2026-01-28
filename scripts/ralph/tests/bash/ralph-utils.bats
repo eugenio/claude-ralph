@@ -807,3 +807,32 @@ EOF
 
     [[ "$stories" == "[]" ]]
 }
+
+# =============================================================================
+# GLOBAL INSTANCE FUNCTIONS TESTS (GM-004)
+# =============================================================================
+
+@test "get_ralph_global_dir() returns default path" {
+    unset RALPH_GLOBAL_DIR
+    local dir
+    dir=$(get_ralph_global_dir)
+    [[ "$dir" == "$HOME/.ralph/global" ]]
+}
+
+@test "get_ralph_global_dir() respects RALPH_GLOBAL_DIR env var" {
+    export RALPH_GLOBAL_DIR="/tmp/test-global"
+    local dir
+    dir=$(get_ralph_global_dir)
+    [[ "$dir" == "/tmp/test-global" ]]
+    unset RALPH_GLOBAL_DIR
+}
+
+@test "unregister_ralph_global_instance() is idempotent" {
+    export RALPH_GLOBAL_DIR="$TEST_TEMP_DIR/global"
+    mkdir -p "$RALPH_GLOBAL_DIR/instances"
+    run unregister_ralph_global_instance
+    [[ "$status" -eq 0 ]]
+    run unregister_ralph_global_instance
+    [[ "$status" -eq 0 ]]
+    unset RALPH_GLOBAL_DIR
+}

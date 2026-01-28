@@ -449,6 +449,24 @@ Describe 'Add-LogEntry' {
     }
 }
 
+# GM-004: Global Instance Functions Tests
+Describe 'Get-RalphGlobalDir' {
+    It 'Returns a valid path' {
+        $dir = Get-RalphGlobalDir
+        $dir | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Unregister-RalphGlobalInstance' {
+    It 'Is idempotent - succeeds when not registered' {
+        $env:RALPH_GLOBAL_DIR = Join-Path $TestDrive 'global'
+        New-Item -Path (Join-Path $env:RALPH_GLOBAL_DIR 'instances') -ItemType Directory -Force | Out-Null
+        $result = Unregister-RalphGlobalInstance
+        $result | Should -Be $true
+        $env:RALPH_GLOBAL_DIR = $null
+    }
+}
+
 AfterAll {
     # Clean up - remove the imported module
     Remove-Module RalphUtils -ErrorAction SilentlyContinue

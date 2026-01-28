@@ -98,3 +98,19 @@
   - Non-blocking key read: `read -rsn1 -t 0.1` with timeout for responsive TUI
   - Trap EXIT for cleanup to ensure cursor is restored even on errors
 ---
+
+## 2026-01-29 - GM-004 (Global Instance Deregistration)
+- What was implemented:
+  - Added global functions to ralph-utils.sh: get_ralph_global_dir(), get_ralph_global_instances_dir(), get_ralph_global_link_name(), unregister_ralph_global_instance(), test_ralph_global_registered()
+  - Added global functions to ralph.sh with updated cleanup_on_exit()
+  - Added PowerShell functions to RalphUtils.psm1 and updated Invoke-RalphCleanup
+  - Added tests to ralph-utils.bats and RalphUtils.Tests.ps1
+- Files changed:
+  - scripts/ralph/ralph-utils.sh, ralph.sh, RalphUtils.psm1
+  - scripts/ralph/tests/bash/ralph-utils.bats, tests/RalphUtils.Tests.ps1
+- **Learnings:**
+  - ralph.sh is self-contained, doesn't source ralph-utils.sh
+  - Global directory: ~/.ralph/global/ (Unix), $env:USERPROFILE\.ralph\global\ (Windows)
+  - Link name format: {project-basename}-{instance-id}
+  - Deregistration must be idempotent
+---
