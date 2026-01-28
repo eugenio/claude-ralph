@@ -734,9 +734,22 @@ get_ralph_story_lock() {
     local timestamp=0
     local pid=0
 
-    [[ -f "$lock_dir/owner.txt" ]] && owner=$(cat "$lock_dir/owner.txt" | tr -d '\n')
-    [[ -f "$lock_dir/timestamp.txt" ]] && timestamp=$(cat "$lock_dir/timestamp.txt" | tr -d '\n')
-    [[ -f "$lock_dir/pid.txt" ]] && pid=$(cat "$lock_dir/pid.txt" | tr -d '\n')
+    # Read with .txt extension (new format) or without (legacy format)
+    if [[ -f "$lock_dir/owner.txt" ]]; then
+        owner=$(cat "$lock_dir/owner.txt" | tr -d '\n')
+    elif [[ -f "$lock_dir/owner" ]]; then
+        owner=$(cat "$lock_dir/owner" | tr -d '\n')
+    fi
+    if [[ -f "$lock_dir/timestamp.txt" ]]; then
+        timestamp=$(cat "$lock_dir/timestamp.txt" | tr -d '\n')
+    elif [[ -f "$lock_dir/timestamp" ]]; then
+        timestamp=$(cat "$lock_dir/timestamp" | tr -d '\n')
+    fi
+    if [[ -f "$lock_dir/pid.txt" ]]; then
+        pid=$(cat "$lock_dir/pid.txt" | tr -d '\n')
+    elif [[ -f "$lock_dir/pid" ]]; then
+        pid=$(cat "$lock_dir/pid" | tr -d '\n')
+    fi
 
     local now age is_dead is_stale
     now=$(date +%s)
