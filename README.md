@@ -18,11 +18,13 @@ Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 
 The original Ralph uses [Amp CLI](https://ampcode.com) which requires Amp credits. This port:
 
-- ✅ Uses **Claude Code CLI** (`claude -p`) 
+- ✅ Uses **Claude Code CLI** (`claude -p`)
 - ✅ Works with your Claude Pro or Max subscription
 - ✅ Same autonomous loop pattern
 - ✅ Same PRD-driven workflow
 - ✅ Includes browser verification for UI stories
+- ✅ **Multi-instance support** - Run multiple instances concurrently on the same PRD
+- ✅ **Cross-platform** - Full PowerShell 7+ support for Windows, macOS, and Linux
 
 ## Prerequisites
 
@@ -31,6 +33,7 @@ The original Ralph uses [Amp CLI](https://ampcode.com) which requires Amp credit
 - A git repository for your project
 - Claude Max subscription (for token usage)
 - [Playwright](https://playwright.dev) for UI verification (optional, for frontend stories)
+- **PowerShell 7+** (optional, for cross-platform support) - [Install Guide](https://github.com/PowerShell/PowerShell/releases)
 
 ```bash
 # Install Playwright for UI story verification
@@ -155,15 +158,99 @@ Ralph will autonomously:
 
 **Key difference:** Steps 1-2 are **interactive** (you guide Claude), Step 3 is **autonomous** (Ralph loops without you).
 
+## Multi-Instance Support
+
+Run multiple Ralph instances concurrently to parallelize story execution. Each instance claims and works on different stories simultaneously.
+
+### Quick Start (Multi-Instance)
+
+**Bash:**
+```bash
+# Launch 3 parallel instances
+./ralph-parallel.sh 3
+
+# Monitor with TUI dashboard
+./ralph-dashboard.sh
+
+# Stop all instances
+./ralph-parallel.sh stop
+```
+
+**PowerShell:**
+```powershell
+# Launch 3 parallel instances
+./scripts/ralph/ralph-parallel.ps1 Start -Count 3
+
+# Monitor with TUI dashboard
+./scripts/ralph/ralph-dashboard.ps1
+
+# Stop all instances
+./scripts/ralph/ralph-parallel.ps1 Stop
+```
+
+### How It Works
+
+- Each instance gets a unique ID: `{username}-{hostname}-{pid}-{timestamp}`
+- Stories are locked atomically before work begins (via `mkdir`)
+- Instances work on separate feature branches: `ralph/{short-id}/{story-id}`
+- PRD updates are protected with file locking (flock/mutex)
+- Dead instances and stale locks are automatically detected and cleaned
+
+See [Multi-Instance Guide](docs/multi-instance.md) for full documentation.
+
+## Management Scripts
+
+### Dashboard (`ralph-dashboard.sh` / `ralph-dashboard.ps1`)
+
+TUI dashboard for monitoring all instances in real-time.
+
+```bash
+./ralph-dashboard.sh              # Bash
+./scripts/ralph/ralph-dashboard.ps1   # PowerShell
+```
+
+Keys: `q` quit, `r` refresh, `l` lock details, `c` cleanup dead instances
+
+### Lock Management (`ralph-locks.sh` / `ralph-locks.ps1`)
+
+View and manage story locks.
+
+```bash
+./ralph-locks.sh status           # Show all locks
+./ralph-locks.sh release US-001   # Force release a lock
+./ralph-locks.sh cleanup          # Remove stale locks
+```
+
+### Cleanup (`ralph-cleanup.sh` / `ralph-cleanup.ps1`)
+
+Clean up dead and old instances.
+
+```bash
+./ralph-cleanup.sh                # Show summary
+./ralph-cleanup.sh --dead         # Clean dead instances (no heartbeat >5 min)
+./ralph-cleanup.sh --old          # Clean old instances (>7 days)
+```
+
 ## File Structure
 
 ```
 your-project/
+├── ralph-parallel.sh             # Launch multiple instances (Bash)
+├── ralph-dashboard.sh            # TUI monitoring dashboard (Bash)
+├── ralph-locks.sh                # Lock management (Bash)
+├── ralph-cleanup.sh              # Instance cleanup (Bash)
+├── ralph.sh                      # Main loop (single instance, Bash)
+│
 ├── scripts/
 │   └── ralph/                    # Ralph files (self-contained)
-│       ├── ralph.sh             # Main loop script
+│       ├── ralph.ps1            # Main loop script (PowerShell)
+│       ├── ralph-parallel.ps1   # Launch multiple instances (PowerShell)
+│       ├── ralph-dashboard.ps1  # TUI dashboard (PowerShell)
+│       ├── ralph-locks.ps1      # Lock management (PowerShell)
+│       ├── ralph-cleanup.ps1    # Instance cleanup (PowerShell)
 │       ├── ralph-once.sh        # Single iteration script
 │       ├── ralph-status.sh      # Status checker
+│       ├── RalphUtils.psm1      # Shared PowerShell module (60+ functions)
 │       ├── prompt.md            # Instructions for each Claude iteration
 │       ├── prd.json             # User stories with passes status
 │       ├── prd.json.example     # Example PRD format
@@ -171,9 +258,21 @@ your-project/
 │       ├── ralph.log            # Execution log with timestamps
 │       ├── .last-branch         # Current branch tracker
 │       ├── archive/             # Previous runs
-│       └── skills/              # Claude Code skills
-│           ├── prd/             # PRD generation skill
-│           └── ralph/           # PRD to JSON conversion skill
+│       ├── instances/           # Per-instance data (multi-instance)
+│       │   └── {instance-id}/
+│       │       ├── ralph.log    # Instance-specific log
+│       │       ├── progress.txt # Instance progress
+│       │       └── status.json  # Heartbeat & current state
+│       ├── locks/               # Story locks (multi-instance)
+│       │   └── {story-id}.lock/ # Atomic lock directory
+│       ├── skills/              # Claude Code skills
+│       │   ├── prd/             # PRD generation skill
+│       │   └── ralph/           # PRD to JSON conversion skill
+│       └── tests/               # Pester test suites
+│
+├── docs/                         # Documentation
+│   ├── multi-instance.md        # Multi-instance architecture guide
+│   └── powershell-guide.md      # PowerShell usage guide
 │
 └── [Project root]                # Your project files
     ├── src/                      # Source code (created by Ralph)
@@ -229,6 +328,7 @@ When all stories have `passes: true`, Ralph outputs `<promise>COMPLETE</promise>
 
 Run these commands from your project root:
 
+**Bash:**
 ```bash
 # See which stories are done
 cat scripts/ralph/prd.json | jq '.userStories[] | {id, title, passes}'
@@ -247,6 +347,29 @@ git log --oneline -10
 
 # Check status with nice formatting
 ./scripts/ralph/ralph-status.sh
+
+# Multi-instance: check all instance statuses
+./ralph-dashboard.sh
+
+# Multi-instance: view/manage locks
+./ralph-locks.sh status
+```
+
+**PowerShell:**
+```powershell
+# See which stories are done
+Get-Content scripts/ralph/prd.json | ConvertFrom-Json |
+    Select-Object -ExpandProperty userStories |
+    Select-Object id, title, passes
+
+# Check status with nice formatting
+./scripts/ralph/ralph-status.ps1
+
+# Multi-instance: check all instance statuses
+./scripts/ralph/ralph-dashboard.ps1 -Once
+
+# Multi-instance: view/manage locks
+./scripts/ralph/ralph-locks.ps1 Status
 ```
 
 ## Customizing prompt.md
@@ -351,7 +474,44 @@ Load the dev-browser skill
    cat scripts/ralph/prd.json | jq '.userStories[] | {id, title, passes}'
    ```
 
+### Multi-instance issues
+
+**Stuck locks**: If a lock appears stuck (instance died without cleanup):
+```bash
+./ralph-locks.sh status          # Check lock status
+./ralph-locks.sh cleanup         # Remove stale locks
+./ralph-locks.sh release US-001  # Force release specific lock
+```
+
+**Dead instances**: Clean up instances with no heartbeat:
+```bash
+./ralph-cleanup.sh --dead
+```
+
+**PRD corruption**: Restore from automatic backup:
+```bash
+cp scripts/ralph/prd.json.bak scripts/ralph/prd.json
+```
+
+### PowerShell issues
+
+**Script execution disabled** (Windows):
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+**PowerShell 7 not found**: Install from [PowerShell Releases](https://github.com/PowerShell/PowerShell/releases) or via package manager:
+```bash
+brew install powershell          # macOS
+sudo apt install powershell      # Ubuntu/Debian
+winget install Microsoft.PowerShell  # Windows
+```
+
+**Module not found**: Ensure you're running from the project root where `scripts/ralph/` exists.
+
 ## Quick Reference
+
+### Bash
 
 ```bash
 # Install ralph in a project
@@ -367,12 +527,25 @@ claude
 # "Load the prd skill and create a PRD for [feature]"
 # "Load the ralph skill and convert tasks/prd-[name].md to prd.json"
 
-# Run ralph autonomously
+# Run ralph autonomously (single instance)
 ./scripts/ralph/ralph.sh 10
+
+# Run ralph autonomously (multiple instances)
+./ralph-parallel.sh 3
+
+# Monitor with dashboard
+./ralph-dashboard.sh
 
 # Check status
 ./scripts/ralph/ralph-status.sh
 cat scripts/ralph/prd.json | jq '.userStories[] | {id, title, passes}'
+
+# Manage locks
+./ralph-locks.sh status
+./ralph-locks.sh cleanup
+
+# Cleanup instances
+./ralph-cleanup.sh --dead
 
 # Debug single iteration
 ./scripts/ralph/ralph-once.sh
@@ -380,6 +553,71 @@ cat scripts/ralph/prd.json | jq '.userStories[] | {id, title, passes}'
 # See learnings
 cat scripts/ralph/progress.txt
 ```
+
+### PowerShell
+
+```powershell
+# Install ralph in a project
+New-Item -ItemType Directory -Path scripts -Force
+Set-Location scripts
+git clone https://github.com/RobinOppenstam/claude-ralph ralph
+Set-Location ..
+
+# Install skills globally
+./scripts/ralph/install-skills.ps1
+
+# Run ralph autonomously (single instance)
+./scripts/ralph/ralph.ps1 -MaxIterations 10
+
+# Run ralph autonomously (multiple instances)
+./scripts/ralph/ralph-parallel.ps1 Start -Count 3
+
+# Monitor with dashboard
+./scripts/ralph/ralph-dashboard.ps1
+
+# Check status
+./scripts/ralph/ralph-status.ps1
+
+# Manage locks
+./scripts/ralph/ralph-locks.ps1 Status
+./scripts/ralph/ralph-locks.ps1 Cleanup
+
+# Cleanup instances
+./scripts/ralph/ralph-cleanup.ps1 -Dead
+```
+
+## Cross-Platform Support
+
+Ralph provides full cross-platform compatibility with both Bash and PowerShell implementations.
+
+| Feature | Bash | PowerShell |
+|---------|------|------------|
+| Single Instance | `ralph.sh` | `ralph.ps1` |
+| Multiple Instances | `ralph-parallel.sh` | `ralph-parallel.ps1` |
+| Dashboard | `ralph-dashboard.sh` | `ralph-dashboard.ps1` |
+| Lock Management | `ralph-locks.sh` | `ralph-locks.ps1` |
+| Cleanup | `ralph-cleanup.sh` | `ralph-cleanup.ps1` |
+| PRD Locking | flock | .NET Mutex |
+| Story Locks | mkdir (atomic) | mkdir (atomic) |
+
+Both implementations share the same file formats (status.json, lock directories, PRD), so you can mix Bash and PowerShell instances in the same project.
+
+See [PowerShell Guide](docs/powershell-guide.md) for detailed PowerShell usage.
+
+## Documentation
+
+- [Multi-Instance Guide](docs/multi-instance.md) - Architecture, commands, and troubleshooting for parallel execution
+- [PowerShell Guide](docs/powershell-guide.md) - Complete PowerShell reference with module functions
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RALPH_DEBUG` | 0 | Enable debug logging |
+| `RALPH_LOCK_TIMEOUT` | 7200 | Lock timeout in seconds (2 hours) |
+| `RALPH_CLEANUP_TTL` | 7 | Days to keep old instances |
+| `RALPH_MAX_INSTANCES` | 8 | Maximum parallel instances |
+| `RALPH_ITERATIONS` | 10 | Default iterations per instance |
 
 ## Credits
 
