@@ -432,6 +432,28 @@ merge_story_branch() {
 }
 
 # =============================================================================
+# GLOBAL INSTANCE FUNCTIONS (GM-004)
+# =============================================================================
+
+get_ralph_global_dir() {
+    echo "${RALPH_GLOBAL_DIR:-$HOME/.ralph/global}"
+}
+
+get_ralph_global_link_name() {
+    local project_name
+    project_name=$(basename "$PROJECT_ROOT")
+    echo "${project_name}-${INSTANCE_ID}"
+}
+
+unregister_ralph_global_instance() {
+    [[ "${RALPH_GLOBAL_DISABLE:-0}" == "1" ]] && return 0
+    local link_path="$(get_ralph_global_dir)/instances/$(get_ralph_global_link_name)"
+    if [[ -L "$link_path" || -e "$link_path" ]]; then
+        rm -f "$link_path" 2>/dev/null && log "Unregistered from global registry" || true
+    fi
+}
+
+# =============================================================================
 # SIGNAL HANDLING (US-011)
 # =============================================================================
 
@@ -441,6 +463,9 @@ cleanup_on_exit() {
 
     # Release all locks
     release_all_locks
+
+    # Unregister from global registry (GM-004)
+    unregister_ralph_global_instance
 
     # Stash any uncommitted changes
     cd "$PROJECT_ROOT"
