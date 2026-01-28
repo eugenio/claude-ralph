@@ -3,15 +3,15 @@
 # ralph-locks.sh - Manage story locks for multi-instance Ralph
 # =============================================================================
 #
-# SYNOPSIS:
-#   ralph-locks.sh <command> [options]
-#
 # DESCRIPTION:
-#   Provides commands to view, release, and clean up story locks
-#   used by concurrent Ralph instances.
+#   Provides commands to view, release, and clean up story locks used by
+#   concurrent Ralph instances.
+#
+# USAGE:
+#   ./ralph-locks.sh [command] [options]
 #
 # COMMANDS:
-#   status              Show all current locks
+#   status              Show all current locks (default)
 #   release -s STORY_ID Force release a specific lock
 #   release-all         Force release all locks
 #   cleanup             Remove stale locks (>2 hours or dead owner)
@@ -30,7 +30,7 @@
 
 set -euo pipefail
 
-# Script directory
+# Determine script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source shared utilities
@@ -38,35 +38,61 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/ralph-utils.sh"
 
 # =============================================================================
-# DISPLAY FUNCTIONS
+# HELP FUNCTION
 # =============================================================================
 
 show_help() {
     echo ""
-    echo -e "${COLOR_CYAN}Usage: ./ralph-locks.sh <Command> [Options]${COLOR_RESET}"
+    write_colored "cyan" "Usage: ./ralph-locks.sh <command> [options]"
     echo ""
-    echo -e "${COLOR_YELLOW}Commands:${COLOR_RESET}"
+    write_colored "yellow" "Commands:"
     echo "  status              Show all current locks"
     echo "  release -s STORY_ID Force release a specific lock"
     echo "  release-all         Force release all locks"
     echo "  cleanup             Remove stale locks (>2 hours or dead owner)"
     echo "  help                Show this help"
     echo ""
-    echo -e "${COLOR_YELLOW}Examples:${COLOR_RESET}"
+    write_colored "yellow" "Examples:"
     echo "  ./ralph-locks.sh status"
     echo "  ./ralph-locks.sh release -s US-001"
     echo "  ./ralph-locks.sh cleanup"
     echo ""
 }
 
-show_lock_status() {
-    local separator
-    separator=$(printf '═%.0s' {1..60})
+# =============================================================================
+# FORMAT FUNCTIONS
+# =============================================================================
 
+# format_age()
+# Formats age in seconds to human-readable format
+# Arguments:
+#   $1 - Age in seconds
+# Output: Formatted string (e.g., "5m", "2h")
+#
+format_age() {
+    local age="$1"
+
+    if [[ "$age" -lt 60 ]]; then
+        echo "${age}s"
+    elif [[ "$age" -lt 3600 ]]; then
+        echo "$((age / 60))m"
+    else
+        echo "$((age / 3600))h"
+    fi
+}
+
+# =============================================================================
+# COMMAND FUNCTIONS
+# =============================================================================
+
+# show_lock_status()
+# Displays all current locks with their status
+#
+show_lock_status() {
     echo ""
-    echo -e "${COLOR_BLUE}${separator}${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}                    RALPH LOCK STATUS${COLOR_RESET}"
-    echo -e "${COLOR_BLUE}${separator}${COLOR_RESET}"
+    write_colored "blue" "$(printf '%0.s═' {1..60})"
+    write_colored "cyan" "                    RALPH LOCK STATUS"
+    write_colored "blue" "$(printf '%0.s═' {1..60})"
     echo ""
 
     local locks_json
@@ -76,16 +102,16 @@ show_lock_status() {
     lock_count=$(echo "$locks_json" | jq 'length')
 
     if [[ "$lock_count" -eq 0 ]]; then
-        echo -e "  ${COLOR_GREEN}No active locks${COLOR_RESET}"
+        write_colored "green" "  No active locks"
         echo ""
-        return
+        return 0
     fi
 
     # Header
     printf "${COLOR_WHITE}%-12s %-30s %-10s %-10s${COLOR_RESET}\n" "STORY" "OWNER" "AGE" "STATUS"
     printf "%-12s %-30s %-10s %-10s\n" "-----" "-----" "---" "------"
 
-    # Iterate over locks
+    # Process each lock
     echo "$locks_json" | jq -c '.[]' | while read -r lock; do
         local story_id owner age is_dead is_stale
 
@@ -97,131 +123,134 @@ show_lock_status() {
 
         # Format age
         local age_str
-        if [[ "$age" -lt 60 ]]; then
-            age_str="${age}s"
-        elif [[ "$age" -lt 3600 ]]; then
-            age_str="$((age / 60))m"
-        else
-            age_str="$((age / 3600))h"
-        fi
+        age_str=$(format_age "$age")
 
         # Determine status and color
         local status color
         if [[ "$is_dead" == "true" ]]; then
             status="dead owner"
-            color="$COLOR_RED"
+            color="red"
         elif [[ "$is_stale" == "true" ]]; then
             status="stale"
-            color="$COLOR_YELLOW"
+            color="yellow"
         else
             status="valid"
-            color="$COLOR_GREEN"
+            color="green"
         fi
 
         # Truncate owner if too long
         local owner_short
-        if [[ "${#owner}" -gt 30 ]]; then
+        if [[ ${#owner} -gt 30 ]]; then
             owner_short="${owner:0:27}..."
         else
             owner_short="$owner"
         fi
 
         printf "%-12s %-30s %-10s " "$story_id" "$owner_short" "$age_str"
-        echo -e "${color}${status}${COLOR_RESET}"
+        write_colored "$color" "$status"
     done
 
     echo ""
 }
 
-# =============================================================================
-# COMMAND FUNCTIONS
-# =============================================================================
-
-cmd_release() {
+# invoke_release()
+# Releases a specific lock
+# Arguments:
+#   $1 - Story ID to release
+#
+invoke_release() {
     local story_id="$1"
 
     if [[ -z "$story_id" ]]; then
-        echo -e "${COLOR_RED}Error: StoryId required for release command${COLOR_RESET}"
+        write_colored "red" "Error: StoryId required for release command"
         echo "Usage: ./ralph-locks.sh release -s US-001"
         exit 1
     fi
 
     local lock_info
     if ! lock_info=$(get_ralph_story_lock "$story_id" 2>/dev/null); then
-        echo -e "${COLOR_YELLOW}No lock found for $story_id${COLOR_RESET}"
-        return
+        write_colored "yellow" "No lock found for $story_id"
+        return 0
     fi
 
     local owner
     owner=$(echo "$lock_info" | jq -r '.owner')
 
-    echo -e "${COLOR_YELLOW}Releasing lock for $story_id (owner: $owner)...${COLOR_RESET}"
+    write_colored "yellow" "Releasing lock for $story_id (owner: $owner)..."
 
     if unlock_ralph_story "$story_id" "force"; then
-        echo -e "${COLOR_GREEN}Lock released${COLOR_RESET}"
+        write_colored "green" "Lock released"
     else
-        echo -e "${COLOR_RED}Failed to release lock${COLOR_RESET}"
+        write_colored "red" "Failed to release lock"
+        exit 1
     fi
 }
 
-cmd_release_all() {
-    echo -e "${COLOR_YELLOW}Releasing all locks...${COLOR_RESET}"
+# invoke_release_all()
+# Releases all current locks
+#
+invoke_release_all() {
+    write_colored "yellow" "Releasing all locks..."
 
     local locks_json
     locks_json=$(get_ralph_story_locks)
-
-    local lock_count
-    lock_count=$(echo "$locks_json" | jq 'length')
+    local count=0
 
     echo "$locks_json" | jq -r '.[].storyId' | while read -r story_id; do
-        if unlock_ralph_story "$story_id" "force"; then
-            echo -e "  ${COLOR_GRAY}Released: $story_id${COLOR_RESET}"
+        if [[ -n "$story_id" ]]; then
+            if unlock_ralph_story "$story_id" "force"; then
+                write_colored "gray" "  Released: $story_id"
+                ((count++)) || true
+            fi
         fi
     done
 
-    echo -e "${COLOR_GREEN}Released $lock_count locks${COLOR_RESET}"
+    # Get final count
+    local final_count
+    final_count=$(echo "$locks_json" | jq 'length')
+
+    write_colored "green" "Released $final_count locks"
 }
 
-cmd_cleanup() {
-    echo -e "${COLOR_BLUE}Cleaning up stale locks...${COLOR_RESET}"
+# invoke_cleanup()
+# Removes stale and dead-owner locks
+#
+invoke_cleanup() {
+    write_colored "blue" "Cleaning up stale locks..."
 
     local locks_json
     locks_json=$(get_ralph_story_locks)
-
     local cleaned=0
 
-    echo "$locks_json" | jq -c '.[]' | while read -r lock; do
-        local story_id is_dead is_stale age
+    echo "$locks_json" | jq -c '.[] | select(.isDead == true or .isStale == true)' | while read -r lock; do
+        local story_id is_dead age
 
         story_id=$(echo "$lock" | jq -r '.storyId')
         is_dead=$(echo "$lock" | jq -r '.isDead')
-        is_stale=$(echo "$lock" | jq -r '.isStale')
         age=$(echo "$lock" | jq -r '.age')
 
-        if [[ "$is_dead" == "true" || "$is_stale" == "true" ]]; then
-            local reason
-            if [[ "$is_dead" == "true" ]]; then
-                reason="dead owner"
-            else
-                reason="stale (${age}s)"
-            fi
+        local reason
+        if [[ "$is_dead" == "true" ]]; then
+            reason="dead owner"
+        else
+            reason="stale (${age}s)"
+        fi
 
-            echo -e "  ${COLOR_YELLOW}Removing: $story_id - $reason${COLOR_RESET}"
+        write_colored "yellow" "  Removing: $story_id - $reason"
 
-            if unlock_ralph_story "$story_id" "force"; then
-                ((cleaned++)) || true
-            fi
+        if unlock_ralph_story "$story_id" "force"; then
+            ((cleaned++)) || true
         fi
     done
 
-    # Count stale locks that were cleaned
+    # Check if any were cleaned
     local stale_count
     stale_count=$(echo "$locks_json" | jq '[.[] | select(.isDead == true or .isStale == true)] | length')
 
     if [[ "$stale_count" -eq 0 ]]; then
-        echo -e "${COLOR_GREEN}No stale locks found${COLOR_RESET}"
+        write_colored "green" "No stale locks found"
     else
-        echo -e "${COLOR_GREEN}Cleaned up $stale_count stale locks${COLOR_RESET}"
+        write_colored "green" "Cleaned up $stale_count stale locks"
     fi
 }
 
@@ -233,29 +262,25 @@ main() {
     local command="${1:-status}"
     shift || true
 
-    # Parse remaining arguments
     local story_id=""
 
+    # Parse options for release command
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -s|--story-id)
+            -s|--story)
                 story_id="${2:-}"
-                shift 2 || { echo "Error: -s requires an argument"; exit 1; }
+                shift 2 || { write_colored "red" "Error: -s requires a story ID"; exit 1; }
                 ;;
             -h|--help)
                 show_help
                 exit 0
                 ;;
             *)
-                # Unknown option, might be story_id directly for backwards compatibility
-                if [[ -z "$story_id" && "$1" != -* ]]; then
+                # Unknown option, might be story ID without flag
+                if [[ -z "$story_id" ]]; then
                     story_id="$1"
-                    shift
-                else
-                    echo "Unknown option: $1"
-                    show_help
-                    exit 1
                 fi
+                shift
                 ;;
         esac
     done
@@ -265,23 +290,26 @@ main() {
             show_lock_status
             ;;
         release)
-            cmd_release "$story_id"
+            invoke_release "$story_id"
             ;;
-        release-all|releaseall)
-            cmd_release_all
+        release-all)
+            invoke_release_all
             ;;
         cleanup)
-            cmd_cleanup
+            invoke_cleanup
             ;;
-        help|-h|--help)
+        help|--help|-h)
             show_help
             ;;
         *)
-            echo "Unknown command: $command"
+            write_colored "red" "Unknown command: $command"
             show_help
             exit 1
             ;;
     esac
 }
 
-main "$@"
+# Run main only if script is executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
