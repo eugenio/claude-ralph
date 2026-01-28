@@ -780,3 +780,339 @@ Describe 'Edge Cases' {
         }
     }
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Alias Installation Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+Describe 'Alias Installation Script Structure' {
+    It 'Defines Get-RalphScriptsPath function' {
+        $script:scriptContent | Should -Match 'function Get-RalphScriptsPath'
+    }
+
+    It 'Defines Install-PowerShellAliases function' {
+        $script:scriptContent | Should -Match 'function Install-PowerShellAliases'
+    }
+
+    It 'Defines Show-AliasInstructions function' {
+        $script:scriptContent | Should -Match 'function Show-AliasInstructions'
+    }
+
+    It 'Uses Read-Host for alias installation prompt' {
+        $script:scriptContent | Should -Match 'Read-Host'
+    }
+
+    It 'Prompts for alias installation after skill install' {
+        $script:scriptContent | Should -Match "install.*aliases.*ralph"
+    }
+}
+
+Describe 'Get-RalphScriptsPath Function' {
+    BeforeAll {
+        # Replicate Get-RalphScriptsPath for testing
+        $script:GetRalphScriptsPath = {
+            param([string]$ScriptRoot)
+
+            # Check if we're in scripts/ralph or repo root
+            if (Test-Path (Join-Path $ScriptRoot 'ralph.ps1')) {
+                return $ScriptRoot
+            }
+            $candidatePath = Join-Path $ScriptRoot 'scripts' 'ralph'
+            if (Test-Path (Join-Path $candidatePath 'ralph.ps1')) {
+                return $candidatePath
+            }
+            # Fallback to script root
+            return $ScriptRoot
+        }
+    }
+
+    Context 'When in scripts/ralph directory' {
+        It 'Returns the script root when ralph.ps1 exists there' {
+            # Create mock directory structure in TestDrive
+            $mockRalphDir = Join-Path $TestDrive 'scripts' 'ralph'
+            New-Item -Path $mockRalphDir -ItemType Directory -Force | Out-Null
+            Set-Content -Path (Join-Path $mockRalphDir 'ralph.ps1') -Value '# mock'
+
+            $result = & $script:GetRalphScriptsPath -ScriptRoot $mockRalphDir
+            $result | Should -Be $mockRalphDir
+        }
+    }
+
+    Context 'When in repo root' {
+        It 'Returns scripts/ralph path when ralph.ps1 exists there' {
+            # Create mock repo structure
+            $mockRepoRoot = Join-Path $TestDrive 'repo'
+            $mockRalphDir = Join-Path $mockRepoRoot 'scripts' 'ralph'
+            New-Item -Path $mockRalphDir -ItemType Directory -Force | Out-Null
+            Set-Content -Path (Join-Path $mockRalphDir 'ralph.ps1') -Value '# mock'
+
+            $result = & $script:GetRalphScriptsPath -ScriptRoot $mockRepoRoot
+            $result | Should -Be $mockRalphDir
+        }
+    }
+
+    Context 'Fallback behavior' {
+        It 'Returns script root as fallback when ralph.ps1 not found' {
+            $mockDir = Join-Path $TestDrive 'empty'
+            New-Item -Path $mockDir -ItemType Directory -Force | Out-Null
+
+            $result = & $script:GetRalphScriptsPath -ScriptRoot $mockDir
+            $result | Should -Be $mockDir
+        }
+    }
+}
+
+Describe 'Install-PowerShellAliases Function' {
+    BeforeAll {
+        # Replicate Install-PowerShellAliases for testing
+        $script:InstallPowerShellAliases = {
+            param(
+                [string]$ProfilePath,
+                [string]$RalphDir
+            )
+
+            # Ensure profile directory exists
+            $profileDir = Split-Path -Parent $ProfilePath
+            if (-not (Test-Path $profileDir)) {
+                try {
+                    New-Item -Path $profileDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+                }
+                catch {
+                    return @{
+                        Success     = $false
+                        ProfilePath = $ProfilePath
+                        Message     = "Failed to create profile directory: $_"
+                    }
+                }
+            }
+
+            # Create profile file if it doesn't exist
+            if (-not (Test-Path $ProfilePath)) {
+                try {
+                    New-Item -Path $ProfilePath -ItemType File -Force -ErrorAction Stop | Out-Null
+                }
+                catch {
+                    return @{
+                        Success     = $false
+                        ProfilePath = $ProfilePath
+                        Message     = "Failed to create profile: $_"
+                    }
+                }
+            }
+
+            # Check if Ralph functions already exist
+            $profileContent = Get-Content -Path $ProfilePath -Raw -ErrorAction SilentlyContinue
+            if ($profileContent -and $profileContent -match '# Ralph functions') {
+                return @{
+                    Success       = $true
+                    ProfilePath   = $ProfilePath
+                    Message       = 'Ralph functions already exist in profile, skipping'
+                    AlreadyExists = $true
+                }
+            }
+
+            # Build the function block
+            $functionBlock = @"
+
+# Ralph functions
+function ralph { pwsh "$RalphDir/ralph.ps1" @args }
+function ralph-once { pwsh "$RalphDir/ralph-once.ps1" @args }
+function ralph-status { pwsh "$RalphDir/ralph-status.ps1" @args }
+"@
+
+            # Append to profile
+            try {
+                Add-Content -Path $ProfilePath -Value $functionBlock -ErrorAction Stop
+                return @{
+                    Success       = $true
+                    ProfilePath   = $ProfilePath
+                    Message       = 'Ralph functions added to profile'
+                    AlreadyExists = $false
+                }
+            }
+            catch {
+                return @{
+                    Success     = $false
+                    ProfilePath = $ProfilePath
+                    Message     = "Failed to write to profile: $_"
+                }
+            }
+        }
+    }
+
+    Context 'Profile creation' {
+        It 'Creates profile directory if it does not exist' {
+            $profilePath = Join-Path $TestDrive 'Documents' 'PowerShell' 'Microsoft.PowerShell_profile.ps1'
+            $ralphDir = Join-Path $TestDrive 'scripts' 'ralph'
+
+            $result = & $script:InstallPowerShellAliases -ProfilePath $profilePath -RalphDir $ralphDir
+
+            $profileDir = Split-Path -Parent $profilePath
+            Test-Path $profileDir | Should -Be $true
+        }
+
+        It 'Creates profile file if it does not exist' {
+            $profilePath = Join-Path $TestDrive 'profile' 'test_profile.ps1'
+            $ralphDir = Join-Path $TestDrive 'scripts' 'ralph'
+
+            $result = & $script:InstallPowerShellAliases -ProfilePath $profilePath -RalphDir $ralphDir
+
+            Test-Path $profilePath | Should -Be $true
+        }
+    }
+
+    Context 'Duplicate detection' {
+        It 'Detects existing Ralph functions and skips' {
+            # Create profile with existing functions
+            $profilePath = Join-Path $TestDrive 'existing_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Some existing config
+
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+"@
+            $ralphDir = Join-Path $TestDrive 'scripts' 'ralph'
+
+            $result = & $script:InstallPowerShellAliases -ProfilePath $profilePath -RalphDir $ralphDir
+
+            $result.Success | Should -Be $true
+            $result.AlreadyExists | Should -Be $true
+            $result.Message | Should -Match 'already exist'
+        }
+
+        It 'Does not duplicate functions when run multiple times' {
+            $profilePath = Join-Path $TestDrive 'multi_run_profile.ps1'
+            $ralphDir = Join-Path $TestDrive 'scripts' 'ralph'
+
+            # First run
+            $result1 = & $script:InstallPowerShellAliases -ProfilePath $profilePath -RalphDir $ralphDir
+            $result1.AlreadyExists | Should -Be $false
+
+            # Second run
+            $result2 = & $script:InstallPowerShellAliases -ProfilePath $profilePath -RalphDir $ralphDir
+            $result2.AlreadyExists | Should -Be $true
+
+            # Check file content - should only have one "# Ralph functions" marker
+            $content = Get-Content -Path $profilePath -Raw
+            $matches = [regex]::Matches($content, '# Ralph functions')
+            $matches.Count | Should -Be 1
+        }
+    }
+
+    Context 'Function content' {
+        It 'Adds correct function block to profile' {
+            $profilePath = Join-Path $TestDrive 'new_profile.ps1'
+            $ralphDir = '/test/scripts/ralph'
+
+            $result = & $script:InstallPowerShellAliases -ProfilePath $profilePath -RalphDir $ralphDir
+
+            $content = Get-Content -Path $profilePath -Raw
+
+            $content | Should -Match '# Ralph functions'
+            $content | Should -Match 'function ralph \{ pwsh "/test/scripts/ralph/ralph\.ps1" @args \}'
+            $content | Should -Match 'function ralph-once \{ pwsh "/test/scripts/ralph/ralph-once\.ps1" @args \}'
+            $content | Should -Match 'function ralph-status \{ pwsh "/test/scripts/ralph/ralph-status\.ps1" @args \}'
+        }
+
+        It 'Uses absolute paths in function definitions' {
+            $profilePath = Join-Path $TestDrive 'abs_path_profile.ps1'
+            $ralphDir = '/absolute/path/to/scripts/ralph'
+
+            $result = & $script:InstallPowerShellAliases -ProfilePath $profilePath -RalphDir $ralphDir
+
+            $content = Get-Content -Path $profilePath -Raw
+            $content | Should -Match '/absolute/path/to/scripts/ralph/ralph\.ps1'
+        }
+    }
+
+    Context 'Return value structure' {
+        It 'Returns Success = $true on successful install' {
+            $profilePath = Join-Path $TestDrive 'success_profile.ps1'
+            $ralphDir = Join-Path $TestDrive 'scripts' 'ralph'
+
+            $result = & $script:InstallPowerShellAliases -ProfilePath $profilePath -RalphDir $ralphDir
+
+            $result.Success | Should -Be $true
+            $result.ProfilePath | Should -Be $profilePath
+            $result.AlreadyExists | Should -Be $false
+        }
+
+        It 'Returns ProfilePath in result' {
+            $profilePath = Join-Path $TestDrive 'path_test_profile.ps1'
+            $ralphDir = Join-Path $TestDrive 'scripts' 'ralph'
+
+            $result = & $script:InstallPowerShellAliases -ProfilePath $profilePath -RalphDir $ralphDir
+
+            $result.ProfilePath | Should -Be $profilePath
+        }
+    }
+
+    Context 'Existing profile content preservation' {
+        It 'Preserves existing profile content when adding functions' {
+            $profilePath = Join-Path $TestDrive 'preserve_profile.ps1'
+            $existingContent = @"
+# My existing PowerShell profile
+Set-Alias -Name ll -Value Get-ChildItem
+`$env:EDITOR = 'code'
+"@
+            Set-Content -Path $profilePath -Value $existingContent
+            $ralphDir = Join-Path $TestDrive 'scripts' 'ralph'
+
+            $result = & $script:InstallPowerShellAliases -ProfilePath $profilePath -RalphDir $ralphDir
+
+            $content = Get-Content -Path $profilePath -Raw
+            $content | Should -Match 'My existing PowerShell profile'
+            $content | Should -Match 'Set-Alias -Name ll'
+            $content | Should -Match "EDITOR = 'code'"
+            $content | Should -Match '# Ralph functions'
+        }
+    }
+}
+
+Describe 'Alias Prompt Handling' {
+    Context 'Script prompt patterns' {
+        It 'Prompts with y/N format (default No)' {
+            $script:scriptContent | Should -Match '\(y/N\)'
+        }
+
+        It 'Accepts y or Y for yes' {
+            $script:scriptContent | Should -Match '\^?\[yY\]'
+        }
+
+        It 'Skips installation gracefully on non-yes input' {
+            $script:scriptContent | Should -Match 'Skipping alias installation'
+        }
+    }
+}
+
+Describe 'Show-AliasInstructions Function' {
+    Context 'Script instruction content' {
+        It 'Shows how to activate aliases' {
+            $script:scriptContent | Should -Match 'To activate'
+        }
+
+        It 'Shows available commands' {
+            $script:scriptContent | Should -Match 'Available commands'
+        }
+
+        It 'Mentions ralph command' {
+            $script:scriptContent | Should -Match 'ralph\s+-\s+Run the ralph loop'
+        }
+
+        It 'Mentions ralph-once command' {
+            $script:scriptContent | Should -Match 'ralph-once\s+-\s+Run a single ralph iteration'
+        }
+
+        It 'Mentions ralph-status command' {
+            $script:scriptContent | Should -Match 'ralph-status\s+-\s+Check ralph progress'
+        }
+
+        It 'Mentions absolute paths' {
+            $script:scriptContent | Should -Match 'absolute paths'
+        }
+
+        It 'Handles AlreadyExists case differently' {
+            $script:scriptContent | Should -Match 'already installed'
+        }
+    }
+}

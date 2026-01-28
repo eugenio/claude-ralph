@@ -183,6 +183,153 @@ function Show-Banner {
     Write-Host ([string]::new([char]0x2550, 55)) -ForegroundColor Blue
 }
 
+function Get-RalphScriptsPath {
+    <#
+    .SYNOPSIS
+        Gets the path to the ralph scripts directory.
+    .OUTPUTS
+        String path to the ralph scripts directory.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    # Check if we're in scripts/ralph or repo root
+    $scriptDir = $PSScriptRoot
+    if (Test-Path (Join-Path $scriptDir 'ralph.ps1')) {
+        return $scriptDir
+    }
+    $candidatePath = Join-Path $scriptDir 'scripts' 'ralph'
+    if (Test-Path (Join-Path $candidatePath 'ralph.ps1')) {
+        return $candidatePath
+    }
+    # Fallback to PSScriptRoot
+    return $scriptDir
+}
+
+function Install-PowerShellAliases {
+    <#
+    .SYNOPSIS
+        Installs PowerShell functions for ralph tools to the user's profile.
+    .OUTPUTS
+        Hashtable with Success, ProfilePath, and Message properties.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    $ralphDir = Get-RalphScriptsPath
+    $profilePath = $PROFILE
+
+    # Ensure profile directory exists
+    $profileDir = Split-Path -Parent $profilePath
+    if (-not (Test-Path $profileDir)) {
+        try {
+            New-Item -Path $profileDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+            Write-ColoredOutput "Created profile directory: $profileDir" -Color Gray
+        }
+        catch {
+            return @{
+                Success     = $false
+                ProfilePath = $profilePath
+                Message     = "Failed to create profile directory: $_"
+            }
+        }
+    }
+
+    # Create profile file if it doesn't exist
+    if (-not (Test-Path $profilePath)) {
+        try {
+            New-Item -Path $profilePath -ItemType File -Force -ErrorAction Stop | Out-Null
+            Write-ColoredOutput "Created profile: $profilePath" -Color Gray
+        }
+        catch {
+            return @{
+                Success     = $false
+                ProfilePath = $profilePath
+                Message     = "Failed to create profile: $_"
+            }
+        }
+    }
+
+    # Check if Ralph functions already exist
+    $profileContent = Get-Content -Path $profilePath -Raw -ErrorAction SilentlyContinue
+    if ($profileContent -and $profileContent -match '# Ralph functions') {
+        return @{
+            Success     = $true
+            ProfilePath = $profilePath
+            Message     = 'Ralph functions already exist in profile, skipping'
+            AlreadyExists = $true
+        }
+    }
+
+    # Build the function block
+    $functionBlock = @"
+
+# Ralph functions
+function ralph { pwsh "$ralphDir/ralph.ps1" @args }
+function ralph-once { pwsh "$ralphDir/ralph-once.ps1" @args }
+function ralph-status { pwsh "$ralphDir/ralph-status.ps1" @args }
+"@
+
+    # Append to profile
+    try {
+        Add-Content -Path $profilePath -Value $functionBlock -ErrorAction Stop
+        return @{
+            Success     = $true
+            ProfilePath = $profilePath
+            Message     = 'Ralph functions added to profile'
+            AlreadyExists = $false
+        }
+    }
+    catch {
+        return @{
+            Success     = $false
+            ProfilePath = $profilePath
+            Message     = "Failed to write to profile: $_"
+        }
+    }
+}
+
+function Show-AliasInstructions {
+    <#
+    .SYNOPSIS
+        Shows post-installation instructions for aliases.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ProfilePath,
+
+        [Parameter()]
+        [bool]$AlreadyExists = $false
+    )
+
+    $ralphDir = Get-RalphScriptsPath
+
+    if ($AlreadyExists) {
+        Write-Host ''
+        Write-ColoredOutput 'Ralph functions already installed in your profile.' -Color Gray
+    }
+    else {
+        Write-Host ''
+        Write-ColoredOutput 'PowerShell functions installed successfully!' -Color Green
+        Write-Host ''
+        Write-Host 'To activate the functions, run:' -ForegroundColor Yellow
+        Write-Host "  . $ProfilePath" -ForegroundColor Cyan
+        Write-ColoredOutput '  Or restart PowerShell' -Color Gray
+    }
+
+    Write-Host ''
+    Write-Host 'Available commands (work from any directory):' -ForegroundColor Yellow
+    Write-Host '  ralph        - Run the ralph loop' -ForegroundColor Cyan
+    Write-Host '  ralph-once   - Run a single ralph iteration' -ForegroundColor Cyan
+    Write-Host '  ralph-status - Check ralph progress' -ForegroundColor Cyan
+    Write-Host ''
+    Write-ColoredOutput "Note: Functions use absolute paths and will always run scripts from:" -Color Gray
+    Write-ColoredOutput "  $ralphDir" -Color Gray
+}
+
 function Main {
     <#
     .SYNOPSIS
@@ -213,7 +360,6 @@ function Main {
         }
         Write-Host ''
         Write-ColoredOutput 'Skills are now available globally in Claude Code.' -Color Gray
-        exit 0
     }
     else {
         # Check if any skills were installed despite errors
@@ -233,6 +379,29 @@ function Main {
         }
         exit 1
     }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Optional alias installation
+    # ─────────────────────────────────────────────────────────────────────────
+    Write-Host ''
+    Write-Host ([string]::new([char]0x2500, 55)) -ForegroundColor Blue
+    $response = Read-Host 'Would you like to install PowerShell aliases for ralph tools? (y/N)'
+
+    if ($response -match '^[yY]') {
+        $aliasResult = Install-PowerShellAliases
+        if ($aliasResult.Success) {
+            Show-AliasInstructions -ProfilePath $aliasResult.ProfilePath -AlreadyExists $aliasResult.AlreadyExists
+        }
+        else {
+            Write-ColoredOutput "Failed to install aliases: $($aliasResult.Message)" -Color Red
+        }
+    }
+    else {
+        Write-ColoredOutput 'Skipping alias installation.' -Color Gray
+    }
+
+    Write-Host ''
+    exit 0
 }
 
 # Run main
