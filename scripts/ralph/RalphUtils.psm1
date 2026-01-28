@@ -1828,6 +1828,14 @@ function Invoke-RalphCleanup {
         Write-Warning "Failed to release locks: $_"
     }
 
+    # Unregister from global registry (GM-004)
+    try {
+        $null = Unregister-RalphGlobalInstance
+    }
+    catch {
+        Write-Warning "Failed to unregister from global registry: $_"
+    }
+
     # Stash uncommitted changes
     try {
         $paths = Get-RalphPaths
@@ -1874,6 +1882,44 @@ function Set-RalphCurrentStory {
     $script:CurrentStoryId = $StoryId
 }
 
+# GM-004: Global Instance Functions
+function Get-RalphGlobalDir {
+    [CmdletBinding()][OutputType([string])]param()
+    if ($env:RALPH_GLOBAL_DIR) { return $env:RALPH_GLOBAL_DIR }
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') { return Join-Path $env:USERPROFILE '.ralph\global' }
+    return Join-Path $env:HOME '.ralph/global'
+}
+
+function Get-RalphGlobalInstancesDir {
+    [CmdletBinding()][OutputType([string])]param()
+    return Join-Path (Get-RalphGlobalDir) 'instances'
+}
+
+function Get-RalphGlobalLinkName {
+    [CmdletBinding()][OutputType([string])]param([string]$InstanceId)
+    if (-not $InstanceId) { $InstanceId = Get-RalphInstanceId }
+    $paths = Get-RalphPaths
+    return "$(Split-Path $paths.ProjectRoot -Leaf)-$InstanceId"
+}
+
+function Unregister-RalphGlobalInstance {
+    [CmdletBinding()][OutputType([bool])]param([string]$InstanceId)
+    if ($env:RALPH_GLOBAL_DISABLE -eq '1') { return $true }
+    if (-not $InstanceId) { $InstanceId = Get-RalphInstanceId }
+    $linkPath = Join-Path (Get-RalphGlobalInstancesDir) (Get-RalphGlobalLinkName -InstanceId $InstanceId)
+    if (Test-Path $linkPath) {
+        try { Remove-Item -Path $linkPath -Force -ErrorAction Stop; return $true }
+        catch { return $false }
+    }
+    return $true
+}
+
+function Test-RalphGlobalRegistered {
+    [CmdletBinding()][OutputType([bool])]param([string]$InstanceId)
+    if (-not $InstanceId) { $InstanceId = Get-RalphInstanceId }
+    return Test-Path (Join-Path (Get-RalphGlobalInstancesDir) (Get-RalphGlobalLinkName -InstanceId $InstanceId))
+}
+
 # Export all public functions
 Export-ModuleMember -Function @(
     'Get-RalphPaths'
@@ -1917,4 +1963,10 @@ Export-ModuleMember -Function @(
     'Register-RalphCleanup'
     'Invoke-RalphCleanup'
     'Set-RalphCurrentStory'
+    # Global instance functions (GM-004)
+    'Get-RalphGlobalDir'
+    'Get-RalphGlobalInstancesDir'
+    'Get-RalphGlobalLinkName'
+    'Unregister-RalphGlobalInstance'
+    'Test-RalphGlobalRegistered'
 )
