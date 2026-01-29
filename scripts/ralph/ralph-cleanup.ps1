@@ -9,13 +9,16 @@
     old instances (older than configured TTL).
 
 .PARAMETER Dead
-    Clean up dead instances.
+    Clean up dead instances (no heartbeat > 5 min).
+
+.PARAMETER Terminated
+    Clean up terminated instances (cleanly finished).
 
 .PARAMETER Old
     Clean up old instances (default TTL: 7 days).
 
 .PARAMETER All
-    Clean up both dead and old instances.
+    Clean up dead, terminated, and old instances.
 
 .PARAMETER WhatIf
     Show what would be cleaned without actually deleting.
@@ -39,6 +42,9 @@ param(
     [switch]$Dead,
 
     [Parameter()]
+    [switch]$Terminated,
+
+    [Parameter()]
     [switch]$Old,
 
     [Parameter()]
@@ -56,19 +62,12 @@ Import-Module $modulePath -Force
 function Show-Summary {
     Write-Host ''
     Write-Host ([string]::new([char]0x2550, 60)) -ForegroundColor Blue
-    Write-Host '                  INSTANCE SUMMARY' -ForegroundColor Cyan
+    Write-Host '                  INSTANCE SUMMARY (Global)' -ForegroundColor Cyan
     Write-Host ([string]::new([char]0x2550, 60)) -ForegroundColor Blue
     Write-Host ''
 
-    $paths = Get-RalphPaths
-    $instancesDir = Join-Path $paths.RalphDir 'instances'
-
-    if (-not (Test-Path $instancesDir)) {
-        Write-Host 'No instances directory'
-        return
-    }
-
-    $instances = Get-RalphInstances -IncludeDead
+    # Use global instances to show all projects
+    $instances = Get-RalphGlobalInstances -IncludeDead
     $total = $instances.Count
     $running = @($instances | Where-Object { -not $_.isDead -and $_.state -notin @('terminated', 'completed') }).Count
     $completed = @($instances | Where-Object { $_.state -eq 'completed' }).Count
@@ -89,30 +88,51 @@ function Show-Summary {
 }
 
 function Clear-DeadInstances {
-    Write-Host 'Checking for dead instances...' -ForegroundColor Blue
+    Write-Host 'Checking for dead instances (global)...' -ForegroundColor Blue
 
-    $instances = Get-RalphInstances -IncludeDead
+    $instances = Get-RalphGlobalInstances -IncludeDead
     $dead = @($instances | Where-Object { $_.isDead })
     $cleaned = 0
 
+    $globalDir = Get-RalphGlobalDir
+
     foreach ($instance in $dead) {
-        Write-Host "  Dead instance: $($instance.shortId) (no heartbeat for $($instance.heartbeatAge)s)" -ForegroundColor Yellow
+        $projectName = if ($instance.projectName) { $instance.projectName } else { 'unknown' }
+        Write-Host "  Dead: $projectName ($($instance.instanceId)) - no heartbeat for $($instance.heartbeatAge)s" -ForegroundColor Yellow
 
         if ($PSCmdlet.ShouldProcess($instance.instanceId, 'Mark as terminated and release locks')) {
-            # Update status to terminated
-            $paths = Get-RalphPaths
-            $statusFile = Join-Path (Join-Path (Join-Path $paths.RalphDir 'instances') $instance.instanceId) 'status.json'
+            # Find instance directory via global registry link
+            $linkPath = Join-Path (Join-Path $globalDir 'instances') "$projectName-$($instance.instanceId)"
+            $instanceDir = $null
 
-            if (Test-Path $statusFile) {
+            if (Test-Path $linkPath) {
+                $link = Get-Item $linkPath
+                if ($link.LinkType -eq 'SymbolicLink') {
+                    $instanceDir = $link.Target
+                }
+            }
+
+            # Update status to terminated
+            if ($instanceDir -and (Test-Path (Join-Path $instanceDir 'status.json'))) {
+                $statusFile = Join-Path $instanceDir 'status.json'
                 $status = Get-Content $statusFile -Raw | ConvertFrom-Json
                 $status.state = 'terminated'
                 $status | ConvertTo-Json -Depth 5 | Set-Content $statusFile -Force
             }
 
-            # Release any locks
-            Get-RalphStoryLocks | Where-Object { $_.Owner -eq $instance.instanceId } | ForEach-Object {
-                Write-Host "    Releasing lock: $($_.StoryId)" -ForegroundColor Yellow
-                $null = Unlock-RalphStory -StoryId $_.StoryId -Force
+            # Release any global locks
+            $locksDir = Join-Path $globalDir 'locks'
+            if (Test-Path $locksDir) {
+                Get-ChildItem -Path $locksDir -Filter '*.lock' | ForEach-Object {
+                    try {
+                        $lock = Get-Content $_.FullName -Raw | ConvertFrom-Json
+                        if ($lock.owner -eq $instance.instanceId) {
+                            Write-Host "    Releasing lock: $($_.BaseName)" -ForegroundColor Yellow
+                            Remove-Item $_.FullName -Force
+                        }
+                    }
+                    catch { }
+                }
             }
 
             $cleaned++
@@ -130,38 +150,118 @@ function Clear-DeadInstances {
     }
 }
 
-function Clear-OldInstances {
-    Write-Host 'Checking for old instances...' -ForegroundColor Blue
+function Clear-TerminatedInstances {
+    Write-Host 'Checking for terminated instances (global)...' -ForegroundColor Blue
 
-    $ttlDays = [int]($env:RALPH_CLEANUP_TTL ?? 7)
-    $cutoff = [DateTimeOffset]::UtcNow.AddDays(-$ttlDays).ToUnixTimeSeconds()
-
-    $paths = Get-RalphPaths
-    $instancesDir = Join-Path $paths.RalphDir 'instances'
+    $globalDir = Get-RalphGlobalDir
+    $instancesDir = Join-Path $globalDir 'instances'
 
     if (-not (Test-Path $instancesDir)) {
-        Write-Host 'No instances directory' -ForegroundColor Green
+        Write-Host 'No global instances directory' -ForegroundColor Green
         return
     }
 
     $cleaned = 0
-    Get-ChildItem -Path $instancesDir -Directory | ForEach-Object {
-        $statusFile = Join-Path $_.FullName 'status.json'
-        if (Test-Path $statusFile) {
-            try {
-                $status = Get-Content $statusFile -Raw | ConvertFrom-Json
-                if ($status.lastHeartbeatEpoch -lt $cutoff) {
-                    $ageDays = [math]::Floor(([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $status.lastHeartbeatEpoch) / 86400)
-                    Write-Host "  Old instance: $($_.Name) ($ageDays days old)" -ForegroundColor Yellow
 
-                    if ($PSCmdlet.ShouldProcess($_.Name, 'Remove instance directory')) {
-                        Remove-Item -Path $_.FullName -Recurse -Force
-                        $cleaned++
+    Get-ChildItem -Path $instancesDir | ForEach-Object {
+        $link = $_
+        $instanceDir = $null
+
+        # Resolve symlink or directory
+        if ($link.LinkType -eq 'SymbolicLink') {
+            $instanceDir = $link.Target
+        }
+        elseif ($link.PSIsContainer) {
+            $instanceDir = $link.FullName
+        }
+
+        if ($instanceDir -and (Test-Path $instanceDir)) {
+            $statusFile = Join-Path $instanceDir 'status.json'
+            if (Test-Path $statusFile) {
+                try {
+                    $status = Get-Content $statusFile -Raw | ConvertFrom-Json
+                    $state = $status.state
+
+                    if ($state -in @('terminated', 'completed')) {
+                        $projectName = $link.Name -replace '-uge-.*$', ''
+                        Write-Host "  Terminated: $projectName ($state)" -ForegroundColor Yellow
+
+                        if ($PSCmdlet.ShouldProcess($link.Name, 'Remove instance directory and global link')) {
+                            # Remove actual instance directory
+                            Remove-Item -Path $instanceDir -Recurse -Force -ErrorAction SilentlyContinue
+                            # Remove global registry link
+                            Remove-Item -Path $link.FullName -Force -ErrorAction SilentlyContinue
+                            $cleaned++
+                        }
                     }
                 }
+                catch {
+                    Write-Warning "Failed to check $($link.Name): $_"
+                }
             }
-            catch {
-                Write-Warning "Failed to check $($_.Name): $_"
+        }
+    }
+
+    if ($cleaned -eq 0 -and -not $WhatIfPreference) {
+        Write-Host 'No terminated instances found' -ForegroundColor Green
+    }
+    elseif ($WhatIfPreference) {
+        Write-Host 'Would remove terminated instances' -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "Removed $cleaned terminated instances" -ForegroundColor Green
+    }
+}
+
+function Clear-OldInstances {
+    Write-Host 'Checking for old instances (global)...' -ForegroundColor Blue
+
+    $ttlDays = [int]($env:RALPH_CLEANUP_TTL ?? 7)
+    $cutoff = [DateTimeOffset]::UtcNow.AddDays(-$ttlDays).ToUnixTimeSeconds()
+
+    $globalDir = Get-RalphGlobalDir
+    $instancesDir = Join-Path $globalDir 'instances'
+
+    if (-not (Test-Path $instancesDir)) {
+        Write-Host 'No global instances directory' -ForegroundColor Green
+        return
+    }
+
+    $cleaned = 0
+    Get-ChildItem -Path $instancesDir | ForEach-Object {
+        $link = $_
+        $instanceDir = $null
+
+        # Resolve symlink or directory
+        if ($link.LinkType -eq 'SymbolicLink') {
+            $instanceDir = $link.Target
+        }
+        elseif ($link.PSIsContainer) {
+            $instanceDir = $link.FullName
+        }
+
+        if ($instanceDir -and (Test-Path $instanceDir)) {
+            $statusFile = Join-Path $instanceDir 'status.json'
+            if (Test-Path $statusFile) {
+                try {
+                    $status = Get-Content $statusFile -Raw | ConvertFrom-Json
+                    if ($status.lastHeartbeatEpoch -lt $cutoff) {
+                        $ageDays = [math]::Floor(([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $status.lastHeartbeatEpoch) / 86400)
+                        $projectName = $link.Name -replace '-uge-.*$', ''
+                        Write-Host "  Old: $projectName ($ageDays days old)" -ForegroundColor Yellow
+
+                        if ($PSCmdlet.ShouldProcess($link.Name, 'Remove instance directory and global link')) {
+                            # Remove actual instance directory
+                            Remove-Item -Path $instanceDir -Recurse -Force -ErrorAction SilentlyContinue
+                            # Remove global registry link
+                            Remove-Item -Path $link.FullName -Force -ErrorAction SilentlyContinue
+                            $cleaned++
+                        }
+                    }
+                }
+                catch {
+                    Write-Warning "Failed to check $($link.Name): $_"
+                }
             }
         }
     }
@@ -180,12 +280,13 @@ function Clear-OldInstances {
 # Main
 if ($All) {
     $Dead = $true
+    $Terminated = $true
     $Old = $true
 }
 
-if (-not $Dead -and -not $Old) {
+if (-not $Dead -and -not $Terminated -and -not $Old) {
     Show-Summary
-    Write-Host 'Run with -Dead, -Old, or -All to clean up instances'
+    Write-Host 'Run with -Dead, -Terminated, -Old, or -All to clean up instances'
     exit 0
 }
 
@@ -196,6 +297,11 @@ if ($WhatIfPreference) {
 
 if ($Dead) {
     Clear-DeadInstances
+    Write-Host ''
+}
+
+if ($Terminated) {
+    Clear-TerminatedInstances
     Write-Host ''
 }
 

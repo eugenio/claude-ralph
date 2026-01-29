@@ -110,18 +110,19 @@ function Render-Header {
 function Render-Instances {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 
-    # Header
-    $headerLine = ' {0,-10} {1,-12} {2,-12} {3,-6} {4,-12} {5,-14}' -f 'INSTANCE', 'STORY', 'STATE', 'ITER', 'RUNTIME', 'BRANCH'
+    # Header - show PROJECT instead of INSTANCE for global view
+    $headerLine = ' {0,-12} {1,-10} {2,-10} {3,-5} {4,-10} {5,-14}' -f 'PROJECT', 'STORY', 'STATE', 'ITER', 'RUNTIME', 'BRANCH'
     Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
     Write-Host $headerLine -NoNewline -ForegroundColor White
     Write-Host ([char]0x2551) -ForegroundColor Blue
 
-    $dividerLine = ' {0,-10} {1,-12} {2,-12} {3,-6} {4,-12} {5,-14}' -f '--------', '-----', '-----', '----', '-------', '------'
+    $dividerLine = ' {0,-12} {1,-10} {2,-10} {3,-5} {4,-10} {5,-14}' -f '-------', '-----', '-----', '----', '-------', '------'
     Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
     Write-Host $dividerLine -NoNewline -ForegroundColor Gray
     Write-Host ([char]0x2551) -ForegroundColor Blue
 
-    $instances = Get-RalphInstances -IncludeDead
+    # Use global instances to show all projects
+    $instances = Get-RalphGlobalInstances -IncludeDead
 
     if ($instances.Count -eq 0) {
         $emptyLine = '  No instances running' + (' ' * 51)
@@ -144,18 +145,21 @@ function Render-Instances {
                 $runtimeStr = '-'
             }
 
-            # Truncate branch
+            # Truncate project and branch
+            $projectName = if ($instance.projectName) { $instance.projectName } else { 'local' }
+            if ($projectName.Length -gt 12) { $projectName = $projectName.Substring(0, 9) + '...' }
+
             $branch = if ($instance.branch.Length -gt 14) { $instance.branch.Substring(0, 11) + '...' } else { $instance.branch }
             if (-not $branch) { $branch = '-' }
 
             $story = if ($instance.currentStory) { $instance.currentStory } else { '-' }
             $iter = "$($instance.iteration)/$($instance.maxIterations)"
 
-            $line = ' {0,-10} {1,-12} ' -f $instance.shortId, $story
+            $line = ' {0,-12} {1,-10} ' -f $projectName, $story
             Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
             Write-Host $line -NoNewline
-            Write-Host ('{0,-12} ' -f $state) -NoNewline -ForegroundColor $color
-            Write-Host ('{0,-6} {1,-12} {2,-14}' -f $iter, $runtimeStr, $branch) -NoNewline
+            Write-Host ('{0,-10} ' -f $state) -NoNewline -ForegroundColor $color
+            Write-Host ('{0,-5} {1,-10} {2,-14}' -f $iter, $runtimeStr, $branch) -NoNewline
             Write-Host ([char]0x2551) -ForegroundColor Blue
         }
     }
@@ -236,7 +240,7 @@ function Show-LocksDetail {
 
 function Invoke-Cleanup {
     Clear-Host
-    & (Join-Path $PSScriptRoot 'ralph-cleanup.ps1') -Dead
+    & (Join-Path $PSScriptRoot 'ralph-cleanup.ps1') -Dead -Terminated
     Write-Host ''
     Write-Host 'Press any key to return to dashboard...' -ForegroundColor Gray
     $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')

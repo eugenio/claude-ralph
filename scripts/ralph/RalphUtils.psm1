@@ -839,6 +839,86 @@ function Get-RalphInstances {
 
 <#
 .SYNOPSIS
+    Gets all Ralph instances from the global registry across all projects.
+
+.DESCRIPTION
+    Reads instance status from the global registry (~/.ralph/global/instances)
+    which contains symlinks to instances in different project directories.
+    This allows dashboards to show instances from all projects.
+
+.PARAMETER IncludeDead
+    Include instances that appear dead (no heartbeat > 5 min).
+
+.OUTPUTS
+    Array of instance status objects with projectName property added.
+
+.EXAMPLE
+    Get-RalphGlobalInstances -IncludeDead
+#>
+function Get-RalphGlobalInstances {
+    [CmdletBinding()]
+    [OutputType([array])]
+    param(
+        [Parameter()]
+        [switch]$IncludeDead
+    )
+
+    $globalDir = Get-RalphGlobalDir
+    $instancesDir = Join-Path $globalDir 'instances'
+
+    if (-not (Test-Path $instancesDir)) {
+        return @()
+    }
+
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $deadThreshold = 300  # 5 minutes
+
+    $instances = @()
+    Get-ChildItem -Path $instancesDir | ForEach-Object {
+        $link = $_
+        $instanceDir = $null
+
+        # Resolve symlink or directory
+        if ($link.LinkType -eq 'SymbolicLink') {
+            $instanceDir = $link.Target
+        }
+        elseif ($link.PSIsContainer) {
+            $instanceDir = $link.FullName
+        }
+
+        if ($instanceDir -and (Test-Path $instanceDir)) {
+            $statusFile = Join-Path $instanceDir 'status.json'
+            if (Test-Path $statusFile) {
+                try {
+                    $status = Get-Content -Path $statusFile -Raw | ConvertFrom-Json
+                    $heartbeatAge = $now - $status.lastHeartbeatEpoch
+                    $isDead = ($heartbeatAge -gt $deadThreshold) -and ($status.state -notin @('terminated', 'completed'))
+
+                    # Extract project name from link name (format: project-name-uge-...)
+                    $linkName = $link.Name
+                    $projectName = $linkName -replace '-uge-.*$', ''
+
+                    $status | Add-Member -NotePropertyName 'isDead' -NotePropertyValue $isDead -Force
+                    $status | Add-Member -NotePropertyName 'heartbeatAge' -NotePropertyValue $heartbeatAge -Force
+                    $status | Add-Member -NotePropertyName 'projectName' -NotePropertyValue $projectName -Force
+
+                    if ($IncludeDead -or -not $isDead) {
+                        $instances += $status
+                    }
+                }
+                catch {
+                    Write-Warning "Failed to read status for $($link.Name): $_"
+                }
+            }
+        }
+    }
+
+    # Sort by lastHeartbeatEpoch descending (most recent first)
+    return $instances | Sort-Object -Property lastHeartbeatEpoch -Descending
+}
+
+<#
+.SYNOPSIS
     Adds a log entry to the instance-specific log file.
 
 .DESCRIPTION
