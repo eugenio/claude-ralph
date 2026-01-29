@@ -182,7 +182,6 @@ invoke_release() {
         write_colored "green" "Lock released"
     else
         write_colored "red" "Failed to release lock"
-        exit 1
     fi
 }
 
@@ -196,20 +195,17 @@ invoke_release_all() {
     locks_json=$(get_ralph_story_locks)
     local count=0
 
-    echo "$locks_json" | jq -r '.[].storyId' | while read -r story_id; do
+    # Use process substitution to avoid subshell counter issue
+    while read -r story_id; do
         if [[ -n "$story_id" ]]; then
             if unlock_ralph_story "$story_id" "force"; then
                 write_colored "gray" "  Released: $story_id"
                 ((count++)) || true
             fi
         fi
-    done
+    done < <(echo "$locks_json" | jq -r '.[].storyId')
 
-    # Get final count
-    local final_count
-    final_count=$(echo "$locks_json" | jq 'length')
-
-    write_colored "green" "Released $final_count locks"
+    write_colored "green" "Released $count locks"
 }
 
 # invoke_cleanup()
@@ -222,7 +218,10 @@ invoke_cleanup() {
     locks_json=$(get_ralph_story_locks)
     local cleaned=0
 
-    echo "$locks_json" | jq -c '.[] | select(.isDead == true or .isStale == true)' | while read -r lock; do
+    # Use process substitution to avoid subshell counter issue
+    while read -r lock; do
+        [[ -z "$lock" ]] && continue
+
         local story_id is_dead age
 
         story_id=$(echo "$lock" | jq -r '.storyId')
@@ -241,16 +240,12 @@ invoke_cleanup() {
         if unlock_ralph_story "$story_id" "force"; then
             ((cleaned++)) || true
         fi
-    done
+    done < <(echo "$locks_json" | jq -c '.[] | select(.isDead == true or .isStale == true)')
 
-    # Check if any were cleaned
-    local stale_count
-    stale_count=$(echo "$locks_json" | jq '[.[] | select(.isDead == true or .isStale == true)] | length')
-
-    if [[ "$stale_count" -eq 0 ]]; then
+    if [[ "$cleaned" -eq 0 ]]; then
         write_colored "green" "No stale locks found"
     else
-        write_colored "green" "Cleaned up $stale_count stale locks"
+        write_colored "green" "Cleaned up $cleaned stale locks"
     fi
 }
 
