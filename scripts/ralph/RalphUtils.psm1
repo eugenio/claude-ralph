@@ -18,6 +18,7 @@
 
 # Script-level variables for paths
 $script:RalphRoot = $PSScriptRoot
+$script:ResolvedPaths = $null
 
 <#
 .SYNOPSIS
@@ -67,6 +68,11 @@ function Get-RalphPaths {
         [string]$ProjectRoot
     )
 
+    # Return cached paths if available and no new parameters specified
+    if (-not $PrdFile -and -not $ProjectRoot -and $script:ResolvedPaths) {
+        return $script:ResolvedPaths
+    }
+
     $ralphDir = $script:RalphRoot
 
     # Determine PRD file and its directory
@@ -103,7 +109,7 @@ function Get-RalphPaths {
         $projectRootPath = Split-Path -Path (Split-Path -Path $ralphDir -Parent) -Parent
     }
 
-    return @{
+    $paths = @{
         RalphDir       = $ralphDir
         ProjectRoot    = $projectRootPath
         PrdFile        = $prdFilePath
@@ -116,6 +122,27 @@ function Get-RalphPaths {
         InstancesDir   = Join-Path $prdDir 'instances'
         LocksDir       = Join-Path $prdDir 'locks'
     }
+
+    # Store resolved paths for subsequent calls without parameters
+    if ($PrdFile -or $ProjectRoot) {
+        $script:ResolvedPaths = $paths
+    }
+
+    return $paths
+}
+
+<#
+.SYNOPSIS
+    Clears cached resolved paths.
+
+.DESCRIPTION
+    Resets the module's cached paths, forcing the next Get-RalphPaths call
+    to recalculate paths. Useful for testing.
+#>
+function Reset-RalphPaths {
+    [CmdletBinding()]
+    param()
+    $script:ResolvedPaths = $null
 }
 
 <#
@@ -2144,6 +2171,7 @@ function Unregister-RalphGlobalInstance {
 # Export all public functions
 Export-ModuleMember -Function @(
     'Get-RalphPaths'
+    'Reset-RalphPaths'
     'Test-Dependencies'
     'Read-PrdJson'
     'Write-PrdJson'
