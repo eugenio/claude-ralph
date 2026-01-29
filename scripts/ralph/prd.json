@@ -35,7 +35,7 @@
       ],
       "passes": false,
       "notes": "Bash implementation of global registration. Uses basename of PROJECT_ROOT for project-name.",
-      "claimedBy": null
+      "claimedBy": "uge-uge-X670E-AORUS-XTREME-701263-1769645040"
     },
     {
       "id": "GM-003",
