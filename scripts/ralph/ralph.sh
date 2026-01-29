@@ -136,6 +136,9 @@ EOF
     # Initialize status file
     update_status "starting" ""
 
+    # Register in global registry (GM-004)
+    register_ralph_global_instance
+
     log "Instance initialized: $INSTANCE_ID"
     log "Instance directory: $INSTANCE_DIR"
 }
@@ -488,11 +491,45 @@ get_ralph_global_link_name() {
     echo "${project_name}-${INSTANCE_ID}"
 }
 
+register_ralph_global_instance() {
+    # Skip if disabled
+    [[ "${RALPH_GLOBAL_DISABLE:-0}" == "1" ]] && return 0
+
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    local instances_dir="$global_dir/instances"
+    local link_name
+    link_name=$(get_ralph_global_link_name)
+    local link_path="$instances_dir/$link_name"
+
+    # Ensure global instances directory exists
+    if [[ ! -d "$instances_dir" ]]; then
+        mkdir -p "$instances_dir" 2>/dev/null || return 1
+        chmod 700 "$global_dir" 2>/dev/null || true
+        chmod 700 "$instances_dir" 2>/dev/null || true
+    fi
+
+    # Remove existing link if present (in case of stale symlink)
+    if [[ -L "$link_path" || -e "$link_path" ]]; then
+        rm -f "$link_path" 2>/dev/null || true
+    fi
+
+    # Create symlink pointing to instance directory
+    if ln -s "$INSTANCE_DIR" "$link_path" 2>/dev/null; then
+        log "Registered in global registry: $link_name"
+        return 0
+    else
+        log "Warning: Failed to register in global registry"
+        return 1
+    fi
+}
+
 unregister_ralph_global_instance() {
     [[ "${RALPH_GLOBAL_DISABLE:-0}" == "1" ]] && return 0
     local link_path="$(get_ralph_global_dir)/instances/$(get_ralph_global_link_name)"
     if [[ -L "$link_path" || -e "$link_path" ]]; then
-        rm -f "$link_path" 2>/dev/null && log "Unregistered from global registry" || true
+        # Use rm -rf for Windows compatibility (ln -s may create directories)
+        rm -rf "$link_path" 2>/dev/null && log "Unregistered from global registry" || true
     fi
 }
 

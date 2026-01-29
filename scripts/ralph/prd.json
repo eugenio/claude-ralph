@@ -59,9 +59,9 @@
         "ralph.sh calls unregister in cleanup_on_exit()",
         "Manual test: run ralph and verify symlink appears in ~/.ralph/global/instances/"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "GM-004 bash implementation. Symlinks allow global dashboard to monitor across projects.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-23468-1769677604"
+      "claimedBy": null
     },
     {
       "id": "PS-004",
@@ -79,7 +79,7 @@
       ],
       "passes": false,
       "notes": "Ensure PowerShell has full global registry support matching bash.",
-      "claimedBy": null
+      "claimedBy": "eugen-FRAMEWORK16-UGE-37140-1769677229"
     },
     {
       "id": "PS-005",

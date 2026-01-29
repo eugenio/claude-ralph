@@ -122,3 +122,62 @@
   - Global dir structure: ~/.ralph/global/instances/ and ~/.ralph/global/locks/
   - Both bash and PowerShell implementations should be parallel and consistent
 ---
+
+## 2026-01-29 - PS-001
+- What was implemented:
+  - Created scripts/ralph/ralph-once.sh - single iteration runner for ralph
+  - Display functions: show_banner(), show_status() with Unicode box-drawing
+  - invoke_claude_code() function that runs Claude Code with prompt.md
+  - TTY detection for proper output handling (tee to stderr when available)
+  - Completion signal detection for <promise>COMPLETE</promise>
+  - Progress comparison before/after iteration to show if progress was made
+  - Sources ralph-utils.sh for shared utilities (colors, PRD functions)
+- Files changed:
+  - scripts/ralph/ralph-once.sh (created, ~209 lines)
+- **Learnings for future iterations:**
+  - Use `[[ -t 2 ]]` to detect if stderr is a TTY for conditional output handling
+  - `tee /dev/tty` fails in non-TTY environments; use `tee /dev/stderr` instead
+  - Match PowerShell script structure: banner → status → claude execution → results
+  - Single iteration scripts don't need instance directories or locking (no multi-instance)
+---
+
+## 2026-01-29 - PS-002
+- What was implemented:
+  - Created scripts/ralph/ralph-parallel.sh - parallel instance launcher for ralph
+  - Commands: start, stop, kill, status, dashboard, help
+  - Start command with -c COUNT and -m MAX_ITERATIONS options
+  - Uses bash background processes (&) for parallel execution
+  - Stores job PIDs in instances/running-jobs.json
+  - Stop sends SIGTERM, kill sends SIGKILL to processes
+  - Status shows running instances, active locks, and PRD progress
+  - Dashboard command launches ralph-dashboard.sh
+  - Respects RALPH_MAX_INSTANCES env var (default: 8)
+  - CPU cores / 2 as default instance count via nproc or sysctl
+- Files changed:
+  - scripts/ralph/ralph-parallel.sh (created, ~500 lines)
+- **Learnings for future iterations:**
+  - Use `nproc` on Linux, `sysctl -n hw.ncpu` on macOS for CPU count
+  - Use `is_process_running()` with `kill -0` to check if PID is alive
+  - `pgrep -f "pattern"` finds processes by command line pattern
+  - Store job metadata as JSON for tracking PIDs, start times, log files
+  - Match PowerShell's -Count/-MaxIterations with bash -c/--count and -m/--max-iterations
+---
+
+## 2026-01-29 - PS-003
+- What was implemented:
+  - Added get_ralph_global_link_name() to ralph-utils.sh - returns {project-name}-{instance-id}
+  - Added register_ralph_global_instance() to ralph-utils.sh - creates symlink in global registry
+  - Added unregister_ralph_global_instance() to ralph-utils.sh - removes symlink from global registry
+  - Added corresponding functions to ralph.sh (which doesn't source ralph-utils.sh)
+  - Updated ralph.sh init_instance() to call register_ralph_global_instance()
+  - cleanup_on_exit() already calls unregister_ralph_global_instance()
+  - Functions respect RALPH_GLOBAL_DISABLE=1 environment variable
+- Files changed:
+  - scripts/ralph/ralph-utils.sh (added 3 global registry instance functions)
+  - scripts/ralph/ralph.sh (added register_ralph_global_instance, updated init_instance)
+- **Learnings for future iterations:**
+  - On Windows/MSYS, `ln -s` may create directory copies instead of symlinks
+  - Use `rm -rf` instead of `rm -f` when removing links for Windows compatibility
+  - ralph.sh has its own copy of global registry functions (doesn't source ralph-utils.sh)
+  - Instance ID changes each time script is sourced (due to timestamp component)
+---
