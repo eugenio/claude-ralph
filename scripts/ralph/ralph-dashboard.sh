@@ -41,7 +41,17 @@ source "$SCRIPT_DIR/ralph-utils.sh"
 # =============================================================================
 
 REFRESH_INTERVAL=2
-FRAME_WIDTH=75
+MIN_FRAME_WIDTH=60
+
+# get_frame_width()
+# Returns the current terminal width minus 2 for borders
+get_frame_width() {
+    local term_width
+    term_width=$(tput cols 2>/dev/null || echo 80)
+    local width=$((term_width - 2))
+    [[ "$width" -lt "$MIN_FRAME_WIDTH" ]] && width="$MIN_FRAME_WIDTH"
+    echo "$width"
+}
 
 # Unicode box drawing characters
 readonly BOX_TL=$'\u2554'  # ╔
@@ -561,6 +571,8 @@ render_footer() {
 # Renders the complete dashboard
 #
 render_dashboard() {
+    # Update frame width dynamically based on terminal size
+    FRAME_WIDTH=$(get_frame_width)
     clear
     render_header
     render_instances

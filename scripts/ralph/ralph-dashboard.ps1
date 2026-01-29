@@ -34,6 +34,18 @@ if (-not (Test-Path $modulePath)) {
 }
 Import-Module $modulePath -Force
 
+# Dynamic frame width
+$script:MinFrameWidth = 60
+$script:FrameWidth = 73
+
+function Get-FrameWidth {
+    $termWidth = [Console]::WindowWidth
+    if ($termWidth -lt 1) { $termWidth = 80 }
+    $width = $termWidth - 2
+    if ($width -lt $script:MinFrameWidth) { $width = $script:MinFrameWidth }
+    return $width
+}
+
 function Get-ProgressBar {
     param(
         [int]$Complete,
@@ -88,15 +100,19 @@ function Get-StateColor {
 }
 
 function Render-Header {
-    Write-Host ([char]0x2554 + [string]::new([char]0x2550, 73) + [char]0x2557) -ForegroundColor Blue
-    Write-Host ([char]0x2551 + '              RALPH DASHBOARD                                            ' + [char]0x2551) -ForegroundColor Blue
-    Write-Host ([char]0x2560 + [string]::new([char]0x2550, 73) + [char]0x2563) -ForegroundColor Blue
+    Write-Host ([char]0x2554 + [string]::new([char]0x2550, $script:FrameWidth) + [char]0x2557) -ForegroundColor Blue
+    $title = 'RALPH DASHBOARD'
+    $titlePad = [Math]::Max(0, $script:FrameWidth - $title.Length)
+    $leftPad = [Math]::Floor($titlePad / 2)
+    $rightPad = $titlePad - $leftPad
+    Write-Host ([char]0x2551 + (' ' * $leftPad) + $title + (' ' * $rightPad) + [char]0x2551) -ForegroundColor Blue
+    Write-Host ([char]0x2560 + [string]::new([char]0x2550, $script:FrameWidth) + [char]0x2563) -ForegroundColor Blue
 
     # Get all projects PRD status
     $projectsStatus = Get-AllProjectsPrdStatus
     if ($projectsStatus.Count -eq 0) {
         $emptyText = '  No PRD files found'
-        $padding = 73 - $emptyText.Length
+        $padding = $script:FrameWidth - $emptyText.Length
         Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
         Write-Host $emptyText -NoNewline -ForegroundColor Gray
         Write-Host (' ' * $padding) -NoNewline
@@ -109,7 +125,7 @@ function Render-Header {
             if ($name.Length -gt 12) { $name = $name.Substring(0, 9) + '...' }
             $bar = Get-ProgressBar -Complete $proj.Complete -Total $proj.Total -Width 20
             $progressText = '  {0,-12} {1} {2}/{3}' -f $name, $bar, $proj.Complete, $proj.Total
-            $padding = 73 - $progressText.Length
+            $padding = $script:FrameWidth - $progressText.Length
             Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
             Write-Host $progressText -NoNewline
             Write-Host (' ' * [Math]::Max(0, $padding)) -NoNewline
@@ -119,14 +135,14 @@ function Render-Header {
         if ($projectsStatus.Count -gt 4) {
             $moreCount = $projectsStatus.Count - 4
             $moreText = "  ... and $moreCount more projects"
-            $padding = 73 - $moreText.Length
+            $padding = $script:FrameWidth - $moreText.Length
             Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
             Write-Host $moreText -NoNewline -ForegroundColor Gray
             Write-Host (' ' * $padding) -NoNewline
             Write-Host ([char]0x2551) -ForegroundColor Blue
         }
     }
-    Write-Host ([char]0x2560 + [string]::new([char]0x2550, 73) + [char]0x2563) -ForegroundColor Blue
+    Write-Host ([char]0x2560 + [string]::new([char]0x2550, $script:FrameWidth) + [char]0x2563) -ForegroundColor Blue
 }
 
 function Render-Instances {
@@ -147,7 +163,8 @@ function Render-Instances {
     $instances = Get-RalphGlobalInstances -IncludeDead
 
     if ($instances.Count -eq 0) {
-        $emptyLine = '  No instances running' + (' ' * 51)
+        $emptyText = '  No instances running'
+        $emptyLine = $emptyText + (' ' * [Math]::Max(0, $script:FrameWidth - $emptyText.Length))
         Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
         Write-Host $emptyLine -NoNewline -ForegroundColor Gray
         Write-Host ([char]0x2551) -ForegroundColor Blue
@@ -188,17 +205,19 @@ function Render-Instances {
 }
 
 function Render-Locks {
-    Write-Host ([char]0x2560 + [string]::new([char]0x2550, 73) + [char]0x2563) -ForegroundColor Blue
+    Write-Host ([char]0x2560 + [string]::new([char]0x2550, $script:FrameWidth) + [char]0x2563) -ForegroundColor Blue
 
     # Get locks from all projects
     $locks = Get-AllProjectsLocks
-    $lockHeader = '  ACTIVE LOCKS' + (' ' * 59)
+    $lockHeaderText = '  ACTIVE LOCKS'
+    $lockHeader = $lockHeaderText + (' ' * [Math]::Max(0, $script:FrameWidth - $lockHeaderText.Length))
     Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
     Write-Host $lockHeader -NoNewline -ForegroundColor White
     Write-Host ([char]0x2551) -ForegroundColor Blue
 
     if ($locks.Count -eq 0) {
-        $noLocks = '    No active locks' + (' ' * 54)
+        $noLocksText = '    No active locks'
+        $noLocks = $noLocksText + (' ' * [Math]::Max(0, $script:FrameWidth - $noLocksText.Length))
         Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
         Write-Host $noLocks -NoNewline -ForegroundColor Gray
         Write-Host ([char]0x2551) -ForegroundColor Blue
@@ -210,7 +229,7 @@ function Render-Locks {
             $projShort = if ($lock.Project.Length -gt 8) { $lock.Project.Substring(0, 5) + '...' } else { $lock.Project }
             $color = if ($lock.IsStale) { 'Yellow' } else { 'Green' }
             $lockLine = '    {0,-8} {1,-8} by {2,-8} for {3,-8}' -f $projShort, $lock.StoryId, $ownerShort, $ageStr
-            $padding = 73 - $lockLine.Length
+            $padding = $script:FrameWidth - $lockLine.Length
             Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
             Write-Host $lockLine -NoNewline -ForegroundColor $color
             Write-Host (' ' * [Math]::Max(0, $padding)) -NoNewline
@@ -218,7 +237,7 @@ function Render-Locks {
         }
         if ($locks.Count -gt 5) {
             $more = "    ... and $($locks.Count - 5) more"
-            $padding = 73 - $more.Length
+            $padding = $script:FrameWidth - $more.Length
             Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
             Write-Host $more -NoNewline -ForegroundColor Gray
             Write-Host (' ' * $padding) -NoNewline
@@ -228,22 +247,26 @@ function Render-Locks {
 }
 
 function Render-Footer {
-    Write-Host ([char]0x2560 + [string]::new([char]0x2550, 73) + [char]0x2563) -ForegroundColor Blue
+    Write-Host ([char]0x2560 + [string]::new([char]0x2550, $script:FrameWidth) + [char]0x2563) -ForegroundColor Blue
 
-    $helpLine = '  Press: q=quit  r=refresh  l=locks  c=cleanup' + (' ' * 27)
+    $helpText = '  Press: q=quit  r=refresh  l=locks  c=cleanup'
+    $helpLine = $helpText + (' ' * [Math]::Max(0, $script:FrameWidth - $helpText.Length))
     Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
     Write-Host $helpLine -NoNewline -ForegroundColor Gray
     Write-Host ([char]0x2551) -ForegroundColor Blue
 
-    $timeLine = "  Last update: $(Get-Date -Format 'HH:mm:ss')" + (' ' * 49)
+    $timeText = "  Last update: $(Get-Date -Format 'HH:mm:ss')"
+    $timeLine = $timeText + (' ' * [Math]::Max(0, $script:FrameWidth - $timeText.Length))
     Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
     Write-Host $timeLine -NoNewline -ForegroundColor Gray
     Write-Host ([char]0x2551) -ForegroundColor Blue
 
-    Write-Host ([char]0x255A + [string]::new([char]0x2550, 73) + [char]0x255D) -ForegroundColor Blue
+    Write-Host ([char]0x255A + [string]::new([char]0x2550, $script:FrameWidth) + [char]0x255D) -ForegroundColor Blue
 }
 
 function Render-Dashboard {
+    # Update frame width dynamically based on terminal size
+    $script:FrameWidth = Get-FrameWidth
     Clear-Host
     Render-Header
     Render-Instances
