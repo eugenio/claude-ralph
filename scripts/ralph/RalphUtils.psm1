@@ -1828,6 +1828,14 @@ function Invoke-RalphCleanup {
         Write-Warning "Failed to release locks: $_"
     }
 
+    # Unregister from global registry (PS-004)
+    try {
+        $null = Unregister-RalphGlobalInstance
+    }
+    catch {
+        Write-Warning "Failed to unregister from global registry: $_"
+    }
+
     # Stash uncommitted changes
     try {
         $paths = Get-RalphPaths
@@ -1921,6 +1929,162 @@ function Initialize-RalphGlobalRegistry {
     }
 }
 
+<#
+.SYNOPSIS
+    Gets the link name for global registry registration.
+
+.DESCRIPTION
+    Returns the link name in format: {project-name}-{instance-id}
+    This is used to create symlinks/junctions in the global registry.
+
+.OUTPUTS
+    System.String
+    The link name for the global registry.
+
+.EXAMPLE
+    $linkName = Get-RalphGlobalLinkName
+    Write-Host "Link name: $linkName"
+#>
+function Get-RalphGlobalLinkName {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $paths = Get-RalphPaths
+    $projectName = Split-Path -Path $paths.ProjectRoot -Leaf
+    $instanceId = Get-RalphInstanceId
+
+    return "$projectName-$instanceId"
+}
+
+<#
+.SYNOPSIS
+    Registers this instance in the global registry.
+
+.DESCRIPTION
+    Creates a symbolic link (Unix) or directory junction (Windows) in the global
+    registry pointing to the local instance directory. This allows the global
+    dashboard to discover instances across different projects.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if registration succeeded, $false otherwise.
+
+.EXAMPLE
+    if (Register-RalphGlobalInstance) {
+        Write-Host "Registered in global registry"
+    }
+#>
+function Register-RalphGlobalInstance {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    # Skip if disabled
+    if ($env:RALPH_GLOBAL_DISABLE -eq '1') {
+        return $true
+    }
+
+    $globalDir = Get-RalphGlobalDir
+    $instancesDir = Join-Path $globalDir 'instances'
+    $linkName = Get-RalphGlobalLinkName
+    $linkPath = Join-Path $instancesDir $linkName
+
+    # Ensure global registry is initialized
+    if (-not (Initialize-RalphGlobalRegistry)) {
+        return $false
+    }
+
+    # Get the local instance directory
+    $instanceId = Get-RalphInstanceId
+    $paths = Get-RalphPaths
+    $instanceDir = Join-Path (Join-Path $paths.RalphDir 'instances') $instanceId
+
+    # Create instance directory if it doesn't exist
+    if (-not (Test-Path $instanceDir)) {
+        try {
+            New-Item -Path $instanceDir -ItemType Directory -Force | Out-Null
+        }
+        catch {
+            Write-Warning "Failed to create instance directory: $_"
+            return $false
+        }
+    }
+
+    # Remove existing link if present (in case of stale link)
+    if (Test-Path $linkPath) {
+        try {
+            Remove-Item -Path $linkPath -Force -Recurse -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Failed to remove existing link: $_"
+        }
+    }
+
+    # Create link (junction on Windows, symlink on Unix)
+    try {
+        if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            # Use directory junction on Windows (doesn't require admin)
+            New-Item -ItemType Junction -Path $linkPath -Target $instanceDir -Force | Out-Null
+        }
+        else {
+            # Use symbolic link on Unix
+            New-Item -ItemType SymbolicLink -Path $linkPath -Target $instanceDir -Force | Out-Null
+        }
+        Add-RalphInstanceLog "Registered in global registry: $linkName"
+        return $true
+    }
+    catch {
+        # Log but don't fail - global registry is optional
+        Add-RalphInstanceLog "Warning: Failed to register in global registry: $_"
+        return $false
+    }
+}
+
+<#
+.SYNOPSIS
+    Unregisters this instance from the global registry.
+
+.DESCRIPTION
+    Removes the symbolic link or directory junction from the global registry
+    that points to this instance. Called during cleanup/shutdown.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if unregistration succeeded or link didn't exist.
+
+.EXAMPLE
+    Unregister-RalphGlobalInstance
+#>
+function Unregister-RalphGlobalInstance {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    # Skip if disabled
+    if ($env:RALPH_GLOBAL_DISABLE -eq '1') {
+        return $true
+    }
+
+    $globalDir = Get-RalphGlobalDir
+    $linkName = Get-RalphGlobalLinkName
+    $linkPath = Join-Path (Join-Path $globalDir 'instances') $linkName
+
+    if (Test-Path $linkPath) {
+        try {
+            Remove-Item -Path $linkPath -Force -Recurse -ErrorAction Stop
+            Add-RalphInstanceLog "Unregistered from global registry"
+            return $true
+        }
+        catch {
+            Write-Warning "Failed to unregister from global registry: $_"
+            return $false
+        }
+    }
+
+    return $true
+}
+
 
 # Export all public functions
 Export-ModuleMember -Function @(
@@ -1965,7 +2129,10 @@ Export-ModuleMember -Function @(
     'Register-RalphCleanup'
     'Invoke-RalphCleanup'
     'Set-RalphCurrentStory'
-    # Global registry functions (GM-001)
+    # Global registry functions (GM-001, PS-004)
     'Get-RalphGlobalDir'
     'Initialize-RalphGlobalRegistry'
+    'Get-RalphGlobalLinkName'
+    'Register-RalphGlobalInstance'
+    'Unregister-RalphGlobalInstance'
 )

@@ -75,6 +75,97 @@ init_ralph_global_registry() {
     return 0
 }
 
+# get_ralph_global_link_name()
+# Returns the link name for global registry registration
+# Format: {project-name}-{instance-id}
+# Output: Link name string
+#
+get_ralph_global_link_name() {
+    local project_root
+    project_root=$(get_project_root)
+    local project_name
+    project_name=$(basename "$project_root")
+    local instance_id
+    instance_id=$(get_ralph_instance_id)
+    echo "${project_name}-${instance_id}"
+}
+
+# register_ralph_global_instance()
+# Creates a symlink in the global registry pointing to the local instance directory
+# This allows the global dashboard to discover instances across projects
+# Returns: 0 on success, 1 on failure or if disabled
+#
+register_ralph_global_instance() {
+    # Skip if disabled
+    if [[ "${RALPH_GLOBAL_DISABLE:-}" == "1" ]]; then
+        return 0
+    fi
+
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    local instances_dir="$global_dir/instances"
+    local link_name
+    link_name=$(get_ralph_global_link_name)
+    local link_path="$instances_dir/$link_name"
+
+    # Ensure global registry is initialized
+    init_ralph_global_registry || return 1
+
+    # Get the local instance directory
+    local instance_id
+    instance_id=$(get_ralph_instance_id)
+    eval "$(get_ralph_paths)"
+    local instance_dir="$INSTANCES_DIR/$instance_id"
+
+    # Create instance directory if it doesn't exist
+    if [[ ! -d "$instance_dir" ]]; then
+        mkdir -p "$instance_dir" 2>/dev/null || return 1
+    fi
+
+    # Remove existing link if present (in case of stale symlink)
+    if [[ -L "$link_path" || -e "$link_path" ]]; then
+        rm -f "$link_path" 2>/dev/null || true
+    fi
+
+    # Create symlink
+    if ln -s "$instance_dir" "$link_path" 2>/dev/null; then
+        add_ralph_instance_log "Registered in global registry: $link_name"
+        return 0
+    else
+        # Log but don't fail - global registry is optional
+        add_ralph_instance_log "Warning: Failed to register in global registry"
+        return 1
+    fi
+}
+
+# unregister_ralph_global_instance()
+# Removes the symlink from the global registry
+# Note: On Windows/MSYS where symlinks may become directories, we use rm -rf
+# Returns: 0 on success or if already unregistered
+#
+unregister_ralph_global_instance() {
+    # Skip if disabled
+    if [[ "${RALPH_GLOBAL_DISABLE:-}" == "1" ]]; then
+        return 0
+    fi
+
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    local link_name
+    link_name=$(get_ralph_global_link_name)
+    local link_path="$global_dir/instances/$link_name"
+
+    if [[ -L "$link_path" || -e "$link_path" ]]; then
+        # Use rm -rf for Windows compatibility (ln -s may create directories)
+        if rm -rf "$link_path" 2>/dev/null; then
+            add_ralph_instance_log "Unregistered from global registry"
+            return 0
+        fi
+    fi
+
+    return 0
+}
+
 # =============================================================================
 # COLOR CODES
 # =============================================================================
