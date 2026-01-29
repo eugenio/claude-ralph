@@ -7,8 +7,11 @@ ralph.log
 # Multi-instance runtime directories and files
 instances/
 locks/
+logs/
 scripts/ralph/instances/
 scripts/ralph/locks/
+scripts/ralph/logs/
+scripts/ralph/tests/**/logs/
 .prd.lock
 *.pids
 
