@@ -116,7 +116,7 @@ show_banner() {
 
     if [[ -n "$branch" ]]; then
         write_colored cyan "Branch: " "-n"
-        echo "$branch"
+        write_colored white "$branch"
     fi
     echo ""
 }
@@ -169,11 +169,7 @@ show_story_table() {
     write_colored gray "$(repeat_char '─' "$TOTAL_WIDTH")"
 
     # Header
-    printf "%s  %s  %s  %s\n" \
-        "$(pad_right "ID" "$ID_WIDTH")" \
-        "$(pad_right "Priority" "$PRIORITY_WIDTH")" \
-        "$(pad_right "Status" "$STATUS_WIDTH")" \
-        "Title"
+    write_colored white "$(pad_right "ID" "$ID_WIDTH")  $(pad_right "Priority" "$PRIORITY_WIDTH")  $(pad_right "Status" "$STATUS_WIDTH")  Title"
 
     # Header separator
     write_colored gray "$(repeat_char '─' "$TOTAL_WIDTH")"

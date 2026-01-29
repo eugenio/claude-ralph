@@ -129,7 +129,7 @@
         "Fix any discrepancies found in either script",
         "Manual test: create locks and verify both scripts show/release them identically"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Lock management must work the same across platforms.",
       "claimedBy": null
     },
@@ -146,7 +146,7 @@
         "Fix any discrepancies found in either script",
         "Manual test: run both with same prd.json and compare output"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Status output should be visually identical on both platforms.",
       "claimedBy": null
     },
@@ -167,7 +167,7 @@
       ],
       "passes": false,
       "notes": "Main loop behavior must be identical for consistent automation.",
-      "claimedBy": null
+      "claimedBy": "eugen-FRAMEWORK16-UGE-37140-1769677229"
     },
     {
       "id": "PS-010",
@@ -184,7 +184,7 @@
       ],
       "passes": false,
       "notes": "Documentation must reflect all available scripts and options.",
-      "claimedBy": null
+      "claimedBy": "eugen-FRAMEWORK16-UGE-7256-1769678632"
     }
   ],
   "qualityChecks": {
