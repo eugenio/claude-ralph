@@ -148,15 +148,32 @@ function Render-Header {
 function Render-Instances {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 
-    # Header - show PROJECT instead of INSTANCE for global view
-    $headerLine = ' {0,-12} {1,-10} {2,-10} {3,-5} {4,-10} {5,-14}' -f 'PROJECT', 'STORY', 'STATE', 'ITER', 'RUNTIME', 'BRANCH'
+    # Calculate dynamic column widths based on frame width
+    # Fixed columns: STATE(12), ITER(7), RUNTIME(12) = 31 + 5 spaces = 36
+    $fixedWidth = 36
+    $available = $script:FrameWidth - $fixedWidth
+    # Distribute to: PROJECT, STORY, BRANCH (ratio 3:2:4)
+    $colProject = [Math]::Max(10, [int]($available * 3 / 9))
+    $colStory = [Math]::Max(8, [int]($available * 2 / 9))
+    $colBranch = [Math]::Max(10, $available - $colProject - $colStory)
+
+    # Header row
+    $headerLine = " {0,-$colProject} {1,-$colStory} {2,-12} {3,-7} {4,-12} {5,-$colBranch}" -f 'PROJECT', 'STORY', 'STATE', 'ITER', 'RUNTIME', 'BRANCH'
+    $headerPad = [Math]::Max(0, $script:FrameWidth - $headerLine.Length)
     Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
     Write-Host $headerLine -NoNewline -ForegroundColor White
+    Write-Host (' ' * $headerPad) -NoNewline
     Write-Host ([char]0x2551) -ForegroundColor Blue
 
-    $dividerLine = ' {0,-12} {1,-10} {2,-10} {3,-5} {4,-10} {5,-14}' -f '-------', '-----', '-----', '----', '-------', '------'
+    # Divider row
+    $divProject = '-' * $colProject
+    $divStory = '-' * $colStory
+    $divBranch = '-' * $colBranch
+    $dividerLine = " {0,-$colProject} {1,-$colStory} {2,-12} {3,-7} {4,-12} {5,-$colBranch}" -f $divProject, $divStory, '------------', '-------', '------------', $divBranch
+    $divPad = [Math]::Max(0, $script:FrameWidth - $dividerLine.Length)
     Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
     Write-Host $dividerLine -NoNewline -ForegroundColor Gray
+    Write-Host (' ' * $divPad) -NoNewline
     Write-Host ([char]0x2551) -ForegroundColor Blue
 
     # Use global instances to show all projects
@@ -184,21 +201,29 @@ function Render-Instances {
                 $runtimeStr = '-'
             }
 
-            # Truncate project and branch
+            # Truncate to column widths
             $projectName = if ($instance.projectName) { $instance.projectName } else { 'local' }
-            if ($projectName.Length -gt 12) { $projectName = $projectName.Substring(0, 9) + '...' }
+            if ($projectName.Length -gt $colProject) { $projectName = $projectName.Substring(0, $colProject - 3) + '...' }
 
-            $branch = if ($instance.branch.Length -gt 14) { $instance.branch.Substring(0, 11) + '...' } else { $instance.branch }
-            if (-not $branch) { $branch = '-' }
+            $branch = if ($instance.branch) { $instance.branch } else { '-' }
+            if ($branch.Length -gt $colBranch) { $branch = $branch.Substring(0, $colBranch - 3) + '...' }
 
             $story = if ($instance.currentStory) { $instance.currentStory } else { '-' }
+            if ($story.Length -gt $colStory) { $story = $story.Substring(0, $colStory - 3) + '...' }
+
             $iter = "$($instance.iteration)/$($instance.maxIterations)"
 
-            $line = ' {0,-12} {1,-10} ' -f $projectName, $story
+            $linePart1 = " {0,-$colProject} {1,-$colStory} " -f $projectName, $story
+            $statePart = "{0,-12} " -f $state
+            $linePart2 = "{0,-7} {1,-12} {2,-$colBranch}" -f $iter, $runtimeStr, $branch
+            $fullLine = $linePart1 + $statePart + $linePart2
+            $linePad = [Math]::Max(0, $script:FrameWidth - $fullLine.Length)
+
             Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
-            Write-Host $line -NoNewline
-            Write-Host ('{0,-10} ' -f $state) -NoNewline -ForegroundColor $color
-            Write-Host ('{0,-5} {1,-10} {2,-14}' -f $iter, $runtimeStr, $branch) -NoNewline
+            Write-Host $linePart1 -NoNewline
+            Write-Host $statePart -NoNewline -ForegroundColor $color
+            Write-Host $linePart2 -NoNewline
+            Write-Host (' ' * $linePad) -NoNewline
             Write-Host ([char]0x2551) -ForegroundColor Blue
         }
     }
@@ -223,12 +248,23 @@ function Render-Locks {
         Write-Host ([char]0x2551) -ForegroundColor Blue
     }
     else {
+        # Calculate dynamic column widths for locks
+        # Fixed: "    " prefix (4) + " by " (4) + " for " (5) = 13
+        $lockFixed = 15
+        $lockAvailable = $script:FrameWidth - $lockFixed
+        # Distribute to: PROJECT, STORY, OWNER, DURATION (ratio 2:2:3:2)
+        $lkProject = [Math]::Max(8, [int]($lockAvailable * 2 / 9))
+        $lkStory = [Math]::Max(8, [int]($lockAvailable * 2 / 9))
+        $lkOwner = [Math]::Max(10, [int]($lockAvailable * 3 / 9))
+        $lkDuration = [Math]::Max(10, $lockAvailable - $lkProject - $lkStory - $lkOwner)
+
         foreach ($lock in $locks | Select-Object -First 5) {
             $ageStr = Format-Duration -Seconds $lock.Age
-            $ownerShort = if ($lock.Owner.Length -gt 8) { $lock.Owner.Substring(0, 5) + '...' } else { $lock.Owner }
-            $projShort = if ($lock.Project.Length -gt 8) { $lock.Project.Substring(0, 5) + '...' } else { $lock.Project }
+            $ownerStr = if ($lock.Owner.Length -gt $lkOwner) { $lock.Owner.Substring(0, $lkOwner - 3) + '...' } else { $lock.Owner }
+            $projStr = if ($lock.Project.Length -gt $lkProject) { $lock.Project.Substring(0, $lkProject - 3) + '...' } else { $lock.Project }
+            $storyStr = if ($lock.StoryId.Length -gt $lkStory) { $lock.StoryId.Substring(0, $lkStory - 3) + '...' } else { $lock.StoryId }
             $color = if ($lock.IsStale) { 'Yellow' } else { 'Green' }
-            $lockLine = '    {0,-8} {1,-8} by {2,-8} for {3,-8}' -f $projShort, $lock.StoryId, $ownerShort, $ageStr
+            $lockLine = "    {0,-$lkProject} {1,-$lkStory} by {2,-$lkOwner} for {3,-$lkDuration}" -f $projStr, $storyStr, $ownerStr, $ageStr
             $padding = $script:FrameWidth - $lockLine.Length
             Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
             Write-Host $lockLine -NoNewline -ForegroundColor $color

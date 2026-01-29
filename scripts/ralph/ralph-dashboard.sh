@@ -378,26 +378,47 @@ render_header() {
 }
 
 # render_instances()
-# Renders the instance table
+# Renders the instance table with dynamic column widths
 #
 render_instances() {
     local now
     now=$(date +%s)
 
+    # Calculate dynamic column widths based on frame width
+    # Fixed columns: STATE(12), ITER(7), RUNTIME(12) = 31 + 5 spaces = 36
+    local fixed_width=36
+    local available=$((FRAME_WIDTH - fixed_width))
+    # Distribute to: PROJECT, STORY, BRANCH (ratio 3:2:4)
+    local col_project=$((available * 3 / 9))
+    local col_story=$((available * 2 / 9))
+    local col_branch=$((available - col_project - col_story))
+    # Minimums
+    [[ "$col_project" -lt 10 ]] && col_project=10
+    [[ "$col_story" -lt 8 ]] && col_story=8
+    [[ "$col_branch" -lt 10 ]] && col_branch=10
+
     # Header row
     local header_line
-    header_line=$(printf " %-12s %-10s %-10s %-5s %-10s %-14s" \
+    header_line=$(printf " %-${col_project}s %-${col_story}s %-12s %-7s %-12s %-${col_branch}s" \
         "PROJECT" "STORY" "STATE" "ITER" "RUNTIME" "BRANCH")
+    local header_padding=$((FRAME_WIDTH - ${#header_line}))
     write_colored blue "${BOX_V}" "-n"
     write_colored white "$header_line" "-n"
+    [[ "$header_padding" -gt 0 ]] && printf "%*s" "$header_padding" ""
     write_colored blue "${BOX_V}"
 
     # Divider row
+    local div_project div_story div_branch
+    div_project=$(repeat_char "-" "$col_project")
+    div_story=$(repeat_char "-" "$col_story")
+    div_branch=$(repeat_char "-" "$col_branch")
     local divider_line
-    divider_line=$(printf " %-12s %-10s %-10s %-5s %-10s %-14s" \
-        "-------" "-----" "-----" "----" "-------" "------")
+    divider_line=$(printf " %-${col_project}s %-${col_story}s %-12s %-7s %-12s %-${col_branch}s" \
+        "$div_project" "$div_story" "------------" "-------" "------------" "$div_branch")
+    local div_padding=$((FRAME_WIDTH - ${#divider_line}))
     write_colored blue "${BOX_V}" "-n"
     write_colored gray "$divider_line" "-n"
+    [[ "$div_padding" -gt 0 ]] && printf "%*s" "$div_padding" ""
     write_colored blue "${BOX_V}"
 
     # Get instances from global registry (shows all projects)
@@ -418,8 +439,8 @@ render_instances() {
         echo "$instances_json" | jq -c '.[]' | while IFS= read -r instance; do
             [[ -z "$instance" ]] && continue
 
-            local is_dead state instance_id short_id current_story iteration max_iterations
-            local branch runtime_str
+            local is_dead state instance_id current_story iteration max_iterations
+            local branch runtime_str project_name
 
             is_dead=$(echo "$instance" | jq -r '.isDead // false')
             state=$(echo "$instance" | jq -r '.state // "unknown"')
@@ -432,7 +453,6 @@ render_instances() {
             color=$(get_state_color "$state")
 
             instance_id=$(echo "$instance" | jq -r '.instanceId // ""')
-            local project_name
             project_name=$(echo "$instance" | jq -r '.projectName // "local"')
             current_story=$(echo "$instance" | jq -r '.currentStory // ""')
             iteration=$(echo "$instance" | jq -r '.iteration // 0')
@@ -449,30 +469,33 @@ render_instances() {
                 runtime_str="-"
             fi
 
-            # Truncate project and branch if needed
-            project_name=$(truncate_string "${project_name:-"local"}" 12)
-            branch=$(truncate_string "${branch:-"-"}" 14)
-
-            # Story display
+            # Truncate to column widths
+            project_name=$(truncate_string "${project_name:-"local"}" "$col_project")
+            branch=$(truncate_string "${branch:-"-"}" "$col_branch")
+            current_story=$(truncate_string "${current_story:-"-"}" "$col_story")
             [[ -z "$current_story" || "$current_story" == "null" ]] && current_story="-"
 
             # Iteration display
             local iter_str="${iteration}/${max_iterations}"
 
-            # Build line
+            # Build line with dynamic widths
             local line_part1
-            line_part1=$(printf " %-12s %-10s " "$project_name" "$current_story")
+            line_part1=$(printf " %-${col_project}s %-${col_story}s " "$project_name" "$current_story")
 
             local state_part
-            state_part=$(printf "%-10s " "$state")
+            state_part=$(printf "%-12s " "$state")
 
             local line_part2
-            line_part2=$(printf "%-5s %-10s %-14s" "$iter_str" "$runtime_str" "$branch")
+            line_part2=$(printf "%-7s %-12s %-${col_branch}s" "$iter_str" "$runtime_str" "$branch")
+
+            local full_line="${line_part1}${state_part}${line_part2}"
+            local line_padding=$((FRAME_WIDTH - ${#full_line}))
 
             write_colored blue "${BOX_V}" "-n"
             printf "%s" "$line_part1"
             write_colored "$color" "$state_part" "-n"
             printf "%s" "$line_part2"
+            [[ "$line_padding" -gt 0 ]] && printf "%*s" "$line_padding" ""
             write_colored blue "${BOX_V}"
         done
     fi
@@ -506,24 +529,39 @@ render_locks() {
         printf "%*s" "$no_locks_padding" ""
         write_colored blue "${BOX_V}"
     else
+        # Calculate dynamic column widths for locks
+        # Fixed: "    " prefix (4) + " by " (4) + " for " (5) + padding = ~15
+        local lock_fixed=15
+        local lock_available=$((FRAME_WIDTH - lock_fixed))
+        # Distribute to: PROJECT, STORY, OWNER, DURATION (ratio 2:2:3:2)
+        local lk_project=$((lock_available * 2 / 9))
+        local lk_story=$((lock_available * 2 / 9))
+        local lk_owner=$((lock_available * 3 / 9))
+        local lk_duration=$((lock_available - lk_project - lk_story - lk_owner))
+        [[ "$lk_project" -lt 8 ]] && lk_project=8
+        [[ "$lk_story" -lt 8 ]] && lk_story=8
+        [[ "$lk_owner" -lt 10 ]] && lk_owner=10
+        [[ "$lk_duration" -lt 10 ]] && lk_duration=10
+
         echo "$locks_json" | jq -c '.[]' | head -5 | while IFS= read -r lock; do
             [[ -z "$lock" ]] && continue
-            local story_id owner age is_stale project age_str owner_short color lock_line lock_line_padding
+            local story_id owner age is_stale project age_str color lock_line lock_line_padding
             story_id=$(echo "$lock" | jq -r '.storyId // ""')
             owner=$(echo "$lock" | jq -r '.owner // ""')
             age=$(echo "$lock" | jq -r '.age // 0')
             is_stale=$(echo "$lock" | jq -r '.isStale // false')
             project=$(echo "$lock" | jq -r '.project // ""')
             age_str=$(format_duration "$age")
-            owner_short=$(truncate_string "$owner" 8)
-            project=$(truncate_string "$project" 8)
+            owner=$(truncate_string "$owner" "$lk_owner")
+            project=$(truncate_string "$project" "$lk_project")
+            story_id=$(truncate_string "$story_id" "$lk_story")
             color="green"
             [[ "$is_stale" == "true" ]] && color="yellow"
-            lock_line=$(printf "    %-8s %-8s by %-8s for %-8s" "$project" "$story_id" "$owner_short" "$age_str")
+            lock_line=$(printf "    %-${lk_project}s %-${lk_story}s by %-${lk_owner}s for %-${lk_duration}s" "$project" "$story_id" "$owner" "$age_str")
             lock_line_padding=$((FRAME_WIDTH - ${#lock_line}))
             write_colored blue "${BOX_V}" "-n"
             write_colored "$color" "$lock_line" "-n"
-            printf "%*s" "$lock_line_padding" ""
+            [[ "$lock_line_padding" -gt 0 ]] && printf "%*s" "$lock_line_padding" ""
             write_colored blue "${BOX_V}"
         done
 
