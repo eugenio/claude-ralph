@@ -165,9 +165,9 @@
         "Fix any discrepancies found in either script",
         "Manual test: run both through one iteration with debug logging"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Main loop behavior must be identical for consistent automation.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-37140-1769677229"
+      "claimedBy": null
     },
     {
       "id": "PS-010",
@@ -182,9 +182,9 @@
         "Verify all file paths in documentation are accurate",
         "Add global registry environment variables (RALPH_GLOBAL_DIR, RALPH_GLOBAL_DISABLE)"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Documentation must reflect all available scripts and options.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-7256-1769678632"
+      "claimedBy": null
     }
   ],
   "qualityChecks": {
