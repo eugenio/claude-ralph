@@ -39,3 +39,8 @@ Thumbs.db
 
 # Node (if using any JS tooling)
 node_modules/
+
+# Project-specific working files
+scripts/ralph/prd.json
+scripts/ralph/prompt.md
+tasks/
