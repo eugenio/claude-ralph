@@ -413,7 +413,7 @@ function Main {
                 Add-RalphInstanceLog "Claude Code exited with code $($result.ExitCode)"
                 Write-ColoredOutput "Claude Code failed with exit code $($result.ExitCode)" -Color Red
                 Write-ColoredOutput 'Releasing story and continuing...' -Color Yellow
-                Release-RalphStoryClaim -StoryId $story.id
+                Remove-RalphStoryClaim -StoryId $story.id
                 $script:CurrentStoryId = $null
             }
         }
@@ -421,7 +421,7 @@ function Main {
             Add-RalphInstanceLog "Error running Claude Code: $_"
             Write-ColoredOutput "Error running Claude Code: $_" -Color Red
             Write-ColoredOutput 'Releasing story and continuing...' -Color Yellow
-            Release-RalphStoryClaim -StoryId $story.id
+            Remove-RalphStoryClaim -StoryId $story.id
             $script:CurrentStoryId = $null
             continue
         }
@@ -444,7 +444,7 @@ function Main {
             $null = Merge-RalphStoryBranch -StoryId $story.id
 
             # Release claim
-            Release-RalphStoryClaim -StoryId $story.id
+            Remove-RalphStoryClaim -StoryId $story.id
             $script:CurrentStoryId = $null
         }
 
@@ -495,7 +495,7 @@ function Main {
 
     # Release any held story
     if ($script:CurrentStoryId) {
-        Release-RalphStoryClaim -StoryId $script:CurrentStoryId
+        Remove-RalphStoryClaim -StoryId $script:CurrentStoryId
     }
 }
 

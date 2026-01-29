@@ -1522,22 +1522,22 @@ function Request-RalphStoryClaim {
 
 <#
 .SYNOPSIS
-    Releases a story claim.
+    Removes a story claim.
 
 .DESCRIPTION
-    Releases lock and clears claimedBy in PRD.
+    Removes lock and clears claimedBy in PRD.
 
 .PARAMETER StoryId
     The story ID to release.
 
 .OUTPUTS
     System.Boolean
-    Returns $true if release succeeded.
+    Returns $true if removal succeeded.
 
 .EXAMPLE
-    Release-RalphStoryClaim -StoryId 'US-001'
+    Remove-RalphStoryClaim -StoryId 'US-001'
 #>
-function Release-RalphStoryClaim {
+function Remove-RalphStoryClaim {
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -2201,7 +2201,7 @@ Export-ModuleMember -Function @(
     # Story claiming functions (PS-004)
     'Get-RalphNextStory'
     'Request-RalphStoryClaim'
-    'Release-RalphStoryClaim'
+    'Remove-RalphStoryClaim'
     'Request-RalphNextStoryClaim'
     # Git branch functions (PS-005)
     'New-RalphStoryBranch'
