@@ -166,6 +166,89 @@ unregister_ralph_global_instance() {
     return 0
 }
 
+# get_ralph_global_instances()
+# Returns JSON array of all instances from the global registry
+# This allows dashboards to see instances across all projects
+# Arguments:
+#   $1 - "all" to include dead instances, otherwise only active
+# Output: JSON array of instance status objects with project info
+#
+get_ralph_global_instances() {
+    local include_dead="${1:-}"
+
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    local instances_dir="$global_dir/instances"
+
+    if [[ ! -d "$instances_dir" ]]; then
+        echo "[]"
+        return 0
+    fi
+
+    local now dead_threshold instances_json
+    now=$(date +%s)
+    dead_threshold=300  # 5 minutes
+
+    instances_json="[]"
+
+    for link in "$instances_dir"/*; do
+        [[ -L "$link" || -d "$link" ]] || continue
+
+        local instance_dir
+        # Resolve symlink to actual directory
+        if [[ -L "$link" ]]; then
+            instance_dir=$(readlink -f "$link" 2>/dev/null) || continue
+        else
+            instance_dir="$link"
+        fi
+
+        [[ -d "$instance_dir" ]] || continue
+
+        local status_file="$instance_dir/status.json"
+        [[ -f "$status_file" ]] || continue
+
+        local status heartbeat_age is_dead state last_heartbeat_epoch
+
+        if ! status=$(cat "$status_file" 2>/dev/null); then
+            continue
+        fi
+
+        last_heartbeat_epoch=$(echo "$status" | jq -r '.lastHeartbeatEpoch // 0')
+        state=$(echo "$status" | jq -r '.state // "unknown"')
+        heartbeat_age=$((now - last_heartbeat_epoch))
+
+        # Check if dead (no heartbeat > 5 min and not in terminal state)
+        if [[ "$heartbeat_age" -gt "$dead_threshold" && "$state" != "terminated" && "$state" != "completed" ]]; then
+            is_dead="true"
+        else
+            is_dead="false"
+        fi
+
+        # Skip dead instances unless requested
+        if [[ "$is_dead" == "true" && "$include_dead" != "all" ]]; then
+            continue
+        fi
+
+        # Extract project name from link name (format: project-name-instance-id)
+        local link_name project_name
+        link_name=$(basename "$link")
+        # Project name is everything before the first "-uge-" pattern
+        project_name=$(echo "$link_name" | sed 's/-uge-.*$//')
+
+        # Add isDead, heartbeatAge, and projectName to status
+        status=$(echo "$status" | jq \
+            --argjson isDead "$is_dead" \
+            --argjson heartbeatAge "$heartbeat_age" \
+            --arg projectName "$project_name" \
+            '. + {isDead: $isDead, heartbeatAge: $heartbeatAge, projectName: $projectName}')
+
+        instances_json=$(echo "$instances_json" | jq --argjson inst "$status" '. + [$inst]')
+    done
+
+    # Sort by lastHeartbeatEpoch descending (most recent first)
+    echo "$instances_json" | jq 'sort_by(-.lastHeartbeatEpoch)'
+}
+
 # =============================================================================
 # COLOR CODES
 # =============================================================================

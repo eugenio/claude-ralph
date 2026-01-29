@@ -107,20 +107,13 @@ repeat_char() {
 show_summary() {
     echo ""
     write_colored blue "$(repeat_char '═' 60)"
-    write_colored cyan "                  INSTANCE SUMMARY"
+    write_colored cyan "                  INSTANCE SUMMARY (Global)"
     write_colored blue "$(repeat_char '═' 60)"
     echo ""
 
-    eval "$(get_ralph_paths)"
-
-    if [[ ! -d "$INSTANCES_DIR" ]]; then
-        echo "No instances directory"
-        return
-    fi
-
-    # Get all instances including dead ones
+    # Get all instances from global registry including dead ones
     local instances_json
-    instances_json=$(get_ralph_instances "all")
+    instances_json=$(get_ralph_global_instances "all" 2>/dev/null || echo "[]")
 
     local total running completed terminated dead
 
@@ -153,10 +146,10 @@ show_summary() {
 # Marks dead instances as terminated and releases their locks
 #
 clear_dead_instances() {
-    write_colored blue "Checking for dead instances..."
+    write_colored blue "Checking for dead instances (global)..."
 
     local instances_json
-    instances_json=$(get_ralph_instances "all")
+    instances_json=$(get_ralph_global_instances "all" 2>/dev/null || echo "[]")
 
     local dead_instances
     dead_instances=$(echo "$instances_json" | jq '[.[] | select(.isDead == true)]')
@@ -175,40 +168,52 @@ clear_dead_instances() {
         local instance
         instance=$(echo "$dead_instances" | jq ".[$i]")
 
-        local instance_id short_id heartbeat_age
+        local instance_id project_name heartbeat_age project_root
         instance_id=$(echo "$instance" | jq -r '.instanceId')
-        short_id=$(echo "$instance" | jq -r '.shortId')
+        project_name=$(echo "$instance" | jq -r '.projectName // "unknown"')
         heartbeat_age=$(echo "$instance" | jq -r '.heartbeatAge')
+        project_root=$(echo "$instance" | jq -r '.projectRoot // ""')
 
-        write_colored yellow "  Dead instance: $short_id (no heartbeat for ${heartbeat_age}s)"
+        write_colored yellow "  Dead: $project_name ($instance_id) - no heartbeat for ${heartbeat_age}s"
 
         if [[ "$DRY_RUN" == "true" ]]; then
             echo "    [DRY RUN] Would mark as terminated and release locks"
             continue
         fi
 
-        eval "$(get_ralph_paths)"
-        local status_file="$INSTANCES_DIR/$instance_id/status.json"
+        # Find the instance directory via global registry
+        local global_dir
+        global_dir=$(get_ralph_global_dir)
+        local link_path="$global_dir/instances/${project_name}-${instance_id}"
+        local instance_dir=""
 
-        # Update status to terminated
-        if [[ -f "$status_file" ]]; then
-            local status_json
-            status_json=$(cat "$status_file")
-            status_json=$(echo "$status_json" | jq '.state = "terminated"')
-            echo "$status_json" > "$status_file"
+        if [[ -L "$link_path" ]]; then
+            instance_dir=$(readlink -f "$link_path" 2>/dev/null) || true
         fi
 
-        # Release any locks held by this instance
-        local locks_json
-        locks_json=$(get_ralph_story_locks)
+        # Update status to terminated
+        if [[ -n "$instance_dir" && -f "$instance_dir/status.json" ]]; then
+            local status_json
+            status_json=$(cat "$instance_dir/status.json")
+            status_json=$(echo "$status_json" | jq '.state = "terminated"')
+            echo "$status_json" > "$instance_dir/status.json"
+        fi
 
-        local owned_locks
-        owned_locks=$(echo "$locks_json" | jq -r --arg owner "$instance_id" '.[] | select(.owner == $owner) | .storyId')
-
-        for story_id in $owned_locks; do
-            write_colored yellow "    Releasing lock: $story_id"
-            unlock_ralph_story "$story_id" "force" > /dev/null 2>&1 || true
-        done
+        # Release any locks held by this instance (check global locks)
+        local global_locks_dir="$global_dir/locks"
+        if [[ -d "$global_locks_dir" ]]; then
+            for lock_file in "$global_locks_dir"/*.lock; do
+                [[ -f "$lock_file" ]] || continue
+                local lock_owner
+                lock_owner=$(jq -r '.owner // ""' "$lock_file" 2>/dev/null) || continue
+                if [[ "$lock_owner" == "$instance_id" ]]; then
+                    local story_id
+                    story_id=$(basename "$lock_file" .lock)
+                    write_colored yellow "    Releasing lock: $story_id"
+                    rm -f "$lock_file" 2>/dev/null || true
+                fi
+            done
+        fi
 
         ((cleaned++)) || true
     done
@@ -221,21 +226,33 @@ clear_dead_instances() {
 }
 
 # clear_terminated_instances()
-# Removes terminated instances (cleanly finished)
+# Removes terminated instances (cleanly finished) from global registry
 #
 clear_terminated_instances() {
-    write_colored blue "Checking for terminated instances..."
+    write_colored blue "Checking for terminated instances (global)..."
 
-    eval "$(get_ralph_paths)"
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    local instances_dir="$global_dir/instances"
 
-    if [[ ! -d "$INSTANCES_DIR" ]]; then
-        write_colored green "No instances directory"
+    if [[ ! -d "$instances_dir" ]]; then
+        write_colored green "No global instances directory"
         return
     fi
 
     local cleaned=0
 
-    for instance_dir in "$INSTANCES_DIR"/*/; do
+    for link in "$instances_dir"/*; do
+        [[ -L "$link" || -d "$link" ]] || continue
+
+        local instance_dir
+        # Resolve symlink to actual directory
+        if [[ -L "$link" ]]; then
+            instance_dir=$(readlink -f "$link" 2>/dev/null) || continue
+        else
+            instance_dir="$link"
+        fi
+
         [[ -d "$instance_dir" ]] || continue
 
         local status_file="$instance_dir/status.json"
@@ -246,20 +263,25 @@ clear_terminated_instances() {
             continue
         fi
 
-        local state
+        local state project_name instance_id
         state=$(echo "$status_json" | jq -r '.state // "unknown"')
+        instance_id=$(echo "$status_json" | jq -r '.instanceId // ""')
+
+        # Extract project name from link name
+        local link_name
+        link_name=$(basename "$link")
+        project_name=$(echo "$link_name" | sed 's/-uge-.*$//')
 
         if [[ "$state" == "terminated" || "$state" == "completed" ]]; then
-            local instance_name short_id
-            instance_name=$(basename "$instance_dir")
-            short_id="${instance_name:0:8}"
-
-            write_colored yellow "  Terminated instance: $short_id ($state)"
+            write_colored yellow "  Terminated: $project_name ($state)"
 
             if [[ "$DRY_RUN" == "true" ]]; then
-                echo "    [DRY RUN] Would remove instance directory"
+                echo "    [DRY RUN] Would remove instance directory and global link"
             else
-                rm -rf "$instance_dir"
+                # Remove the actual instance directory
+                rm -rf "$instance_dir" 2>/dev/null || true
+                # Remove the global registry link
+                rm -f "$link" 2>/dev/null || true
                 ((cleaned++)) || true
             fi
         fi
@@ -275,26 +297,38 @@ clear_terminated_instances() {
 }
 
 # clear_old_instances()
-# Removes instances older than TTL
+# Removes instances older than TTL from global registry
 #
 clear_old_instances() {
-    write_colored blue "Checking for old instances..."
+    write_colored blue "Checking for old instances (global)..."
 
     local ttl_days="${RALPH_CLEANUP_TTL:-7}"
     local now cutoff
     now=$(date +%s)
     cutoff=$((now - (ttl_days * 86400)))
 
-    eval "$(get_ralph_paths)"
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    local instances_dir="$global_dir/instances"
 
-    if [[ ! -d "$INSTANCES_DIR" ]]; then
-        write_colored green "No instances directory"
+    if [[ ! -d "$instances_dir" ]]; then
+        write_colored green "No global instances directory"
         return
     fi
 
     local cleaned=0
 
-    for instance_dir in "$INSTANCES_DIR"/*/; do
+    for link in "$instances_dir"/*; do
+        [[ -L "$link" || -d "$link" ]] || continue
+
+        local instance_dir
+        # Resolve symlink to actual directory
+        if [[ -L "$link" ]]; then
+            instance_dir=$(readlink -f "$link" 2>/dev/null) || continue
+        else
+            instance_dir="$link"
+        fi
+
         [[ -d "$instance_dir" ]] || continue
 
         local status_file="$instance_dir/status.json"
@@ -305,20 +339,27 @@ clear_old_instances() {
             continue
         fi
 
-        local last_heartbeat_epoch
+        local last_heartbeat_epoch project_name
         last_heartbeat_epoch=$(echo "$status_json" | jq -r '.lastHeartbeatEpoch // 0')
 
+        # Extract project name from link name
+        local link_name
+        link_name=$(basename "$link")
+        project_name=$(echo "$link_name" | sed 's/-uge-.*$//')
+
         if [[ "$last_heartbeat_epoch" -lt "$cutoff" ]]; then
-            local instance_name age_days
-            instance_name=$(basename "$instance_dir")
+            local age_days
             age_days=$(((now - last_heartbeat_epoch) / 86400))
 
-            write_colored yellow "  Old instance: $instance_name ($age_days days old)"
+            write_colored yellow "  Old: $project_name ($age_days days old)"
 
             if [[ "$DRY_RUN" == "true" ]]; then
-                echo "    [DRY RUN] Would remove instance directory"
+                echo "    [DRY RUN] Would remove instance directory and global link"
             else
-                rm -rf "$instance_dir"
+                # Remove the actual instance directory
+                rm -rf "$instance_dir" 2>/dev/null || true
+                # Remove the global registry link
+                rm -f "$link" 2>/dev/null || true
                 ((cleaned++)) || true
             fi
         fi

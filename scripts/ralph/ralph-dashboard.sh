@@ -252,23 +252,23 @@ render_instances() {
 
     # Header row
     local header_line
-    header_line=$(printf " %-10s %-12s %-12s %-6s %-12s %-14s" \
-        "INSTANCE" "STORY" "STATE" "ITER" "RUNTIME" "BRANCH")
+    header_line=$(printf " %-12s %-10s %-10s %-5s %-10s %-14s" \
+        "PROJECT" "STORY" "STATE" "ITER" "RUNTIME" "BRANCH")
     write_colored blue "${BOX_V}" "-n"
     write_colored white "$header_line" "-n"
     write_colored blue "${BOX_V}"
 
     # Divider row
     local divider_line
-    divider_line=$(printf " %-10s %-12s %-12s %-6s %-12s %-14s" \
-        "--------" "-----" "-----" "----" "-------" "------")
+    divider_line=$(printf " %-12s %-10s %-10s %-5s %-10s %-14s" \
+        "-------" "-----" "-----" "----" "-------" "------")
     write_colored blue "${BOX_V}" "-n"
     write_colored gray "$divider_line" "-n"
     write_colored blue "${BOX_V}"
 
-    # Get instances
+    # Get instances from global registry (shows all projects)
     local instances_json
-    instances_json=$(get_ralph_instances "all" 2>/dev/null || echo "[]")
+    instances_json=$(get_ralph_global_instances "all" 2>/dev/null || echo "[]")
 
     local instance_count
     instance_count=$(echo "$instances_json" | jq 'length')
@@ -298,7 +298,8 @@ render_instances() {
             color=$(get_state_color "$state")
 
             instance_id=$(echo "$instance" | jq -r '.instanceId // ""')
-            short_id=$(echo "$instance" | jq -r '.shortId // ""')
+            local project_name
+            project_name=$(echo "$instance" | jq -r '.projectName // "local"')
             current_story=$(echo "$instance" | jq -r '.currentStory // ""')
             iteration=$(echo "$instance" | jq -r '.iteration // 0')
             max_iterations=$(echo "$instance" | jq -r '.maxIterations // 0')
@@ -314,7 +315,8 @@ render_instances() {
                 runtime_str="-"
             fi
 
-            # Truncate branch if needed
+            # Truncate project and branch if needed
+            project_name=$(truncate_string "${project_name:-"local"}" 12)
             branch=$(truncate_string "${branch:-"-"}" 14)
 
             # Story display
@@ -325,13 +327,13 @@ render_instances() {
 
             # Build line
             local line_part1
-            line_part1=$(printf " %-10s %-12s " "$short_id" "$current_story")
+            line_part1=$(printf " %-12s %-10s " "$project_name" "$current_story")
 
             local state_part
-            state_part=$(printf "%-12s " "$state")
+            state_part=$(printf "%-10s " "$state")
 
             local line_part2
-            line_part2=$(printf "%-6s %-12s %-14s" "$iter_str" "$runtime_str" "$branch")
+            line_part2=$(printf "%-5s %-10s %-14s" "$iter_str" "$runtime_str" "$branch")
 
             write_colored blue "${BOX_V}" "-n"
             printf "%s" "$line_part1"
