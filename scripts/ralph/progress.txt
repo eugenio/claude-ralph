@@ -217,3 +217,41 @@
   - Both scripts use same Unicode progress bar characters: U+2588 (█) and U+2591 (░)
   - Interactive TUI apps use 100ms polling intervals for responsive keyboard input
 ---
+
+## 2026-01-29 - PS-007
+- What was implemented:
+  - Audited ralph-locks.ps1 vs ralph-locks.sh for behavioral parity
+  - Fixed invoke_release() to not exit 1 on failed release (matches PowerShell)
+  - Fixed invoke_release_all() to use process substitution for accurate counter
+  - Fixed invoke_cleanup() to use process substitution for accurate counter
+- Files changed:
+  - scripts/ralph/ralph-locks.sh (3 fixes)
+- Verified matching behavior:
+  - Same commands: status, release, release-all, cleanup
+  - Same age formatting (Ns, Nm, Nh)
+  - Same stale lock threshold (2 hours / 7200s, RALPH_LOCK_TIMEOUT env var)
+  - Same dead owner detection (heartbeat > 300s, not in terminal state)
+- **Learnings for future iterations:**
+  - Bash pipe to while-read creates subshell; counter increments lost in parent scope
+  - Use process substitution `< <(cmd)` instead of `cmd | while` to preserve variable scope
+  - PowerShell Invoke-Release doesn't exit 1 on failure, just prints error message
+  - Both scripts use same JSON field names (storyId, owner, age, isDead, isStale)
+---
+
+## 2026-01-29 - PS-008
+- What was implemented:
+  - Audited ralph-status.ps1 vs ralph-status.sh for visual and behavioral parity
+  - Fixed header row color: bash now uses white color (matching PowerShell White)
+  - Fixed branch name color: bash now uses white color (matching PowerShell White)
+  - Verified matching progress bar rendering (30-char width, brackets included)
+  - Verified matching column widths: ID=8, Priority=8, Status=10, Title=40
+  - Verified matching color coding: green=complete, yellow=pending, gray=separator
+  - Verified incomplete stories sorted by priority in both scripts
+- Files changed:
+  - scripts/ralph/ralph-status.sh (2 color fixes)
+- **Learnings for future iterations:**
+  - PowerShell uses explicit White color where bash used default/no color
+  - write_colored() function supports "white" color in ralph-utils.sh
+  - Both scripts use identical column widths (8+8+10+40+6=72 total)
+  - Progress bar has brackets embedded in render_progress_bar(), not added separately
+---
