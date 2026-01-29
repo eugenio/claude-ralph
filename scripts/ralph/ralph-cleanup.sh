@@ -11,9 +11,10 @@
 #   (older than configured TTL). Shows instance summary when run without flags.
 #
 # OPTIONS:
-#   -d, --dead      Clean up dead instances
+#   -d, --dead      Clean up dead instances (no heartbeat > 5 min)
+#   -t, --terminated  Clean up terminated instances (cleanly finished)
 #   -o, --old       Clean up old instances (default TTL: 7 days)
-#   -a, --all       Clean up both dead and old instances
+#   -a, --all       Clean up dead, terminated, and old instances
 #   --dry-run       Show what would be cleaned without actually deleting
 #   -h, --help      Show this help message
 #
@@ -46,6 +47,7 @@ source "$SCRIPT_DIR/ralph-utils.sh"
 
 DRY_RUN=false
 CLEAN_DEAD=false
+CLEAN_TERMINATED=false
 CLEAN_OLD=false
 
 # =============================================================================
@@ -60,9 +62,10 @@ show_help() {
     write_colored cyan "Usage: ./ralph-cleanup.sh [options]"
     echo ""
     write_colored yellow "Options:"
-    echo "  -d, --dead      Clean up dead instances (no heartbeat > 5 min)"
-    echo "  -o, --old       Clean up old instances (default TTL: 7 days)"
-    echo "  -a, --all       Clean up both dead and old instances"
+    echo "  -d, --dead        Clean up dead instances (no heartbeat > 5 min)"
+    echo "  -t, --terminated  Clean up terminated instances (cleanly finished)"
+    echo "  -o, --old         Clean up old instances (default TTL: 7 days)"
+    echo "  -a, --all         Clean up dead, terminated, and old instances"
     echo "  --dry-run       Preview mode - show actions without executing"
     echo "  -h, --help      Show this help message"
     echo ""
@@ -217,6 +220,60 @@ clear_dead_instances() {
     fi
 }
 
+# clear_terminated_instances()
+# Removes terminated instances (cleanly finished)
+#
+clear_terminated_instances() {
+    write_colored blue "Checking for terminated instances..."
+
+    eval "$(get_ralph_paths)"
+
+    if [[ ! -d "$INSTANCES_DIR" ]]; then
+        write_colored green "No instances directory"
+        return
+    fi
+
+    local cleaned=0
+
+    for instance_dir in "$INSTANCES_DIR"/*/; do
+        [[ -d "$instance_dir" ]] || continue
+
+        local status_file="$instance_dir/status.json"
+        [[ -f "$status_file" ]] || continue
+
+        local status_json
+        if ! status_json=$(cat "$status_file" 2>/dev/null); then
+            continue
+        fi
+
+        local state
+        state=$(echo "$status_json" | jq -r '.state // "unknown"')
+
+        if [[ "$state" == "terminated" || "$state" == "completed" ]]; then
+            local instance_name short_id
+            instance_name=$(basename "$instance_dir")
+            short_id="${instance_name:0:8}"
+
+            write_colored yellow "  Terminated instance: $short_id ($state)"
+
+            if [[ "$DRY_RUN" == "true" ]]; then
+                echo "    [DRY RUN] Would remove instance directory"
+            else
+                rm -rf "$instance_dir"
+                ((cleaned++)) || true
+            fi
+        fi
+    done
+
+    if [[ "$cleaned" -eq 0 && "$DRY_RUN" != "true" ]]; then
+        write_colored green "No terminated instances found"
+    elif [[ "$DRY_RUN" == "true" ]]; then
+        write_colored yellow "Would remove terminated instances"
+    else
+        write_colored green "Removed $cleaned terminated instances"
+    fi
+}
+
 # clear_old_instances()
 # Removes instances older than TTL
 #
@@ -287,12 +344,17 @@ while [[ $# -gt 0 ]]; do
             CLEAN_DEAD=true
             shift
             ;;
+        -t|--terminated)
+            CLEAN_TERMINATED=true
+            shift
+            ;;
         -o|--old)
             CLEAN_OLD=true
             shift
             ;;
         -a|--all)
             CLEAN_DEAD=true
+            CLEAN_TERMINATED=true
             CLEAN_OLD=true
             shift
             ;;
@@ -313,9 +375,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # If no action specified, show summary and hint
-if [[ "$CLEAN_DEAD" == "false" && "$CLEAN_OLD" == "false" ]]; then
+if [[ "$CLEAN_DEAD" == "false" && "$CLEAN_TERMINATED" == "false" && "$CLEAN_OLD" == "false" ]]; then
     show_summary
-    echo "Run with -d/--dead, -o/--old, or -a/--all to clean up instances"
+    echo "Run with -d/--dead, -t/--terminated, -o/--old, or -a/--all to clean up instances"
     exit 0
 fi
 
@@ -328,6 +390,11 @@ fi
 # Execute requested cleanups
 if [[ "$CLEAN_DEAD" == "true" ]]; then
     clear_dead_instances
+    echo ""
+fi
+
+if [[ "$CLEAN_TERMINATED" == "true" ]]; then
+    clear_terminated_instances
     echo ""
 fi
 

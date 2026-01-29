@@ -69,7 +69,7 @@ show_help() {
     echo "  q - Quit the dashboard"
     echo "  r - Force refresh"
     echo "  l - Show detailed locks view"
-    echo "  c - Run cleanup for dead instances"
+    echo "  c - Run cleanup for dead and terminated instances"
     echo ""
 }
 
@@ -482,7 +482,7 @@ show_locks_detail() {
 #
 invoke_cleanup() {
     clear
-    "$SCRIPT_DIR/ralph-cleanup.sh" --dead
+    "$SCRIPT_DIR/ralph-cleanup.sh" --dead --terminated
     echo ""
     write_colored gray "Press any key to return to dashboard..."
     read -rsn1
