@@ -4,6 +4,9 @@ progress.txt
 .last-branch
 ralph.log
 
+# Backup files
+*.bak
+
 # Multi-instance runtime directories and files
 instances/
 locks/
