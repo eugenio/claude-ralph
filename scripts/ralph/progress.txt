@@ -99,18 +99,26 @@
   - Trap EXIT for cleanup to ensure cursor is restored even on errors
 ---
 
-## 2026-01-29 - GM-004 (Global Instance Deregistration)
+## 2026-01-29 - GM-001
 - What was implemented:
-  - Added global functions to ralph-utils.sh: get_ralph_global_dir(), get_ralph_global_instances_dir(), get_ralph_global_link_name(), unregister_ralph_global_instance(), test_ralph_global_registered()
-  - Added global functions to ralph.sh with updated cleanup_on_exit()
-  - Added PowerShell functions to RalphUtils.psm1 and updated Invoke-RalphCleanup
-  - Added tests to ralph-utils.bats and RalphUtils.Tests.ps1
+  - Global registry directory structure for cross-project Ralph monitoring
+  - Bash: get_ralph_global_dir(), init_ralph_global_registry() in ralph-utils.sh
+  - Bash: init_global_registry() function in ralph.sh, called from init_instance()
+  - PowerShell: Get-RalphGlobalDir, Initialize-RalphGlobalRegistry in RalphUtils.psm1
+  - PowerShell: Updated ralph.ps1 to call Initialize-RalphGlobalRegistry on startup
+  - RALPH_GLOBAL_DIR env var override support for custom global registry location
+  - RALPH_GLOBAL_DISABLE=1 to skip global registration
+  - Permissions: 700 on Unix for security
 - Files changed:
-  - scripts/ralph/ralph-utils.sh, ralph.sh, RalphUtils.psm1
-  - scripts/ralph/tests/bash/ralph-utils.bats, tests/RalphUtils.Tests.ps1
-- **Learnings:**
-  - ralph.sh is self-contained, doesn't source ralph-utils.sh
-  - Global directory: ~/.ralph/global/ (Unix), $env:USERPROFILE\.ralph\global\ (Windows)
-  - Link name format: {project-basename}-{instance-id}
-  - Deregistration must be idempotent
+  - scripts/ralph/ralph-utils.sh (added global registry functions)
+  - scripts/ralph/ralph.sh (added init_global_registry function)
+  - scripts/ralph/RalphUtils.psm1 (added Get-RalphGlobalDir, Initialize-RalphGlobalRegistry)
+  - scripts/ralph/ralph.ps1 (calls Initialize-RalphGlobalRegistry)
+  - scripts/ralph/tests/RalphUtils.Tests.ps1 (added global registry tests)
+  - scripts/ralph/tests/bash/test-global-registry.sh (new bash test file)
+- **Learnings for future iterations:**
+  - Use $userHome instead of $home in PowerShell tests (HOME is read-only)
+  - [regex]::Escape() must be called and stored in variable before using with Should -Match
+  - Global dir structure: ~/.ralph/global/instances/ and ~/.ralph/global/locks/
+  - Both bash and PowerShell implementations should be parallel and consistent
 ---

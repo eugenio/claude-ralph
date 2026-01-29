@@ -1828,14 +1828,6 @@ function Invoke-RalphCleanup {
         Write-Warning "Failed to release locks: $_"
     }
 
-    # Unregister from global registry (GM-004)
-    try {
-        $null = Unregister-RalphGlobalInstance
-    }
-    catch {
-        Write-Warning "Failed to unregister from global registry: $_"
-    }
-
     # Stash uncommitted changes
     try {
         $paths = Get-RalphPaths
@@ -1882,43 +1874,53 @@ function Set-RalphCurrentStory {
     $script:CurrentStoryId = $StoryId
 }
 
-# GM-004: Global Instance Functions
+# =============================================================================
+# GLOBAL REGISTRY FUNCTIONS (GM-001)
+# =============================================================================
+
 function Get-RalphGlobalDir {
-    [CmdletBinding()][OutputType([string])]param()
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
     if ($env:RALPH_GLOBAL_DIR) { return $env:RALPH_GLOBAL_DIR }
-    if ($IsWindows -or $env:OS -eq 'Windows_NT') { return Join-Path $env:USERPROFILE '.ralph\global' }
-    return Join-Path $env:HOME '.ralph/global'
+    $h = if ($IsWindows -or $env:OS -eq 'Windows_NT') { $env:USERPROFILE } else { $env:HOME }
+    return Join-Path $h '.ralph' 'global'
 }
 
-function Get-RalphGlobalInstancesDir {
-    [CmdletBinding()][OutputType([string])]param()
-    return Join-Path (Get-RalphGlobalDir) 'instances'
-}
-
-function Get-RalphGlobalLinkName {
-    [CmdletBinding()][OutputType([string])]param([string]$InstanceId)
-    if (-not $InstanceId) { $InstanceId = Get-RalphInstanceId }
-    $paths = Get-RalphPaths
-    return "$(Split-Path $paths.ProjectRoot -Leaf)-$InstanceId"
-}
-
-function Unregister-RalphGlobalInstance {
-    [CmdletBinding()][OutputType([bool])]param([string]$InstanceId)
+function Initialize-RalphGlobalRegistry {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
     if ($env:RALPH_GLOBAL_DISABLE -eq '1') { return $true }
-    if (-not $InstanceId) { $InstanceId = Get-RalphInstanceId }
-    $linkPath = Join-Path (Get-RalphGlobalInstancesDir) (Get-RalphGlobalLinkName -InstanceId $InstanceId)
-    if (Test-Path $linkPath) {
-        try { Remove-Item -Path $linkPath -Force -ErrorAction Stop; return $true }
-        catch { return $false }
+    $globalDir = Get-RalphGlobalDir
+    $instancesDir = Join-Path $globalDir 'instances'
+    $locksDir = Join-Path $globalDir 'locks'
+    try {
+        if (-not (Test-Path $instancesDir)) {
+            New-Item -Path $instancesDir -ItemType Directory -Force | Out-Null
+            if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
+                if (Get-Command chmod -ErrorAction SilentlyContinue) {
+                    chmod 700 $globalDir 2>$null
+                    chmod 700 $instancesDir 2>$null
+                }
+            }
+        }
+        if (-not (Test-Path $locksDir)) {
+            New-Item -Path $locksDir -ItemType Directory -Force | Out-Null
+            if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
+                if (Get-Command chmod -ErrorAction SilentlyContinue) {
+                    chmod 700 $locksDir 2>$null
+                }
+            }
+        }
+        return $true
     }
-    return $true
+    catch {
+        Write-Warning "Failed to initialize global registry: $_"
+        return $false
+    }
 }
 
-function Test-RalphGlobalRegistered {
-    [CmdletBinding()][OutputType([bool])]param([string]$InstanceId)
-    if (-not $InstanceId) { $InstanceId = Get-RalphInstanceId }
-    return Test-Path (Join-Path (Get-RalphGlobalInstancesDir) (Get-RalphGlobalLinkName -InstanceId $InstanceId))
-}
 
 # Export all public functions
 Export-ModuleMember -Function @(
@@ -1963,10 +1965,7 @@ Export-ModuleMember -Function @(
     'Register-RalphCleanup'
     'Invoke-RalphCleanup'
     'Set-RalphCurrentStory'
-    # Global instance functions (GM-004)
+    # Global registry functions (GM-001)
     'Get-RalphGlobalDir'
-    'Get-RalphGlobalInstancesDir'
-    'Get-RalphGlobalLinkName'
-    'Unregister-RalphGlobalInstance'
-    'Test-RalphGlobalRegistered'
+    'Initialize-RalphGlobalRegistry'
 )

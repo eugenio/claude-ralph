@@ -296,6 +296,9 @@ function Main {
         exit 1
     }
 
+    # Initialize global registry (GM-001)
+    $null = Initialize-RalphGlobalRegistry
+
     # Initialize multi-instance
     $script:InstancePaths = New-RalphInstanceDirectory
     Register-RalphCleanup

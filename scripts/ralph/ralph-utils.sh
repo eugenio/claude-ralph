@@ -44,6 +44,38 @@ _RALPH_INSTANCE_ID=""
 _RALPH_INSTANCE_SHORT_ID=""
 
 # =============================================================================
+# GLOBAL REGISTRY FUNCTIONS (GM-001)
+# =============================================================================
+
+get_ralph_global_dir() {
+    if [[ -n "${RALPH_GLOBAL_DIR:-}" ]]; then
+        echo "$RALPH_GLOBAL_DIR"
+        return 0
+    fi
+    echo "${HOME}/.ralph/global"
+}
+
+init_ralph_global_registry() {
+    if [[ "${RALPH_GLOBAL_DISABLE:-}" == "1" ]]; then
+        return 0
+    fi
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    local instances_dir="$global_dir/instances"
+    local locks_dir="$global_dir/locks"
+    if [[ ! -d "$instances_dir" ]]; then
+        mkdir -p "$instances_dir" 2>/dev/null || return 1
+        chmod 700 "$global_dir" 2>/dev/null || true
+        chmod 700 "$instances_dir" 2>/dev/null || true
+    fi
+    if [[ ! -d "$locks_dir" ]]; then
+        mkdir -p "$locks_dir" 2>/dev/null || return 1
+        chmod 700 "$locks_dir" 2>/dev/null || true
+    fi
+    return 0
+}
+
+# =============================================================================
 # COLOR CODES
 # =============================================================================
 
