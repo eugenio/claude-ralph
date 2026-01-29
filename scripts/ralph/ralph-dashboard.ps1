@@ -45,10 +45,10 @@ function Get-ProgressBar {
         return '[' + (' ' * $Width) + ']'
     }
 
-    $filled = [math]::Floor($Complete * $Width / $Total)
-    $empty = $Width - $filled
+    $filled = [int][math]::Floor($Complete * $Width / $Total)
+    $empty = [int]($Width - $filled)
 
-    $bar = '[' + ([char]0x2588 * $filled) + ([char]0x2591 * $empty) + ']'
+    $bar = '[' + ([string][char]0x2588 * $filled) + ([string][char]0x2591 * $empty) + ']'
     return $bar
 }
 
@@ -88,22 +88,44 @@ function Get-StateColor {
 }
 
 function Render-Header {
-    $prd = Read-PrdJson
-    $status = Get-PrdStatus -Prd $prd
-
     Write-Host ([char]0x2554 + [string]::new([char]0x2550, 73) + [char]0x2557) -ForegroundColor Blue
     Write-Host ([char]0x2551 + '              RALPH DASHBOARD                                            ' + [char]0x2551) -ForegroundColor Blue
     Write-Host ([char]0x2560 + [string]::new([char]0x2550, 73) + [char]0x2563) -ForegroundColor Blue
 
-    # Progress bar
-    $bar = Get-ProgressBar -Complete $status.Complete -Total $status.Total
-    $progressText = "  PRD Progress: $bar $($status.Complete)/$($status.Total)"
-    $padding = 73 - $progressText.Length
-    Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
-    Write-Host $progressText -NoNewline
-    Write-Host (' ' * $padding) -NoNewline
-    Write-Host ([char]0x2551) -ForegroundColor Blue
-
+    # Get all projects PRD status
+    $projectsStatus = Get-AllProjectsPrdStatus
+    if ($projectsStatus.Count -eq 0) {
+        $emptyText = '  No PRD files found'
+        $padding = 73 - $emptyText.Length
+        Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
+        Write-Host $emptyText -NoNewline -ForegroundColor Gray
+        Write-Host (' ' * $padding) -NoNewline
+        Write-Host ([char]0x2551) -ForegroundColor Blue
+    } else {
+        # Show each project's progress (max 4)
+        $shown = 0
+        foreach ($proj in $projectsStatus | Select-Object -First 4) {
+            $name = $proj.Name
+            if ($name.Length -gt 12) { $name = $name.Substring(0, 9) + '...' }
+            $bar = Get-ProgressBar -Complete $proj.Complete -Total $proj.Total -Width 20
+            $progressText = '  {0,-12} {1} {2}/{3}' -f $name, $bar, $proj.Complete, $proj.Total
+            $padding = 73 - $progressText.Length
+            Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
+            Write-Host $progressText -NoNewline
+            Write-Host (' ' * [Math]::Max(0, $padding)) -NoNewline
+            Write-Host ([char]0x2551) -ForegroundColor Blue
+            $shown++
+        }
+        if ($projectsStatus.Count -gt 4) {
+            $moreCount = $projectsStatus.Count - 4
+            $moreText = "  ... and $moreCount more projects"
+            $padding = 73 - $moreText.Length
+            Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
+            Write-Host $moreText -NoNewline -ForegroundColor Gray
+            Write-Host (' ' * $padding) -NoNewline
+            Write-Host ([char]0x2551) -ForegroundColor Blue
+        }
+    }
     Write-Host ([char]0x2560 + [string]::new([char]0x2550, 73) + [char]0x2563) -ForegroundColor Blue
 }
 
@@ -168,7 +190,8 @@ function Render-Instances {
 function Render-Locks {
     Write-Host ([char]0x2560 + [string]::new([char]0x2550, 73) + [char]0x2563) -ForegroundColor Blue
 
-    $locks = Get-RalphStoryLocks
+    # Get locks from all projects
+    $locks = Get-AllProjectsLocks
     $lockHeader = '  ACTIVE LOCKS' + (' ' * 59)
     Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
     Write-Host $lockHeader -NoNewline -ForegroundColor White
@@ -183,18 +206,16 @@ function Render-Locks {
     else {
         foreach ($lock in $locks | Select-Object -First 5) {
             $ageStr = Format-Duration -Seconds $lock.Age
-            $ownerShort = if ($lock.Owner.Length -gt 10) { $lock.Owner.Substring(0, 7) + '...' } else { $lock.Owner }
-
-            $color = if ($lock.IsDead) { 'Red' } elseif ($lock.IsStale) { 'Yellow' } else { 'Green' }
-
-            $lockLine = '    {0,-10} held by {1,-10} for {2,-10}' -f $lock.StoryId, $ownerShort, $ageStr
+            $ownerShort = if ($lock.Owner.Length -gt 8) { $lock.Owner.Substring(0, 5) + '...' } else { $lock.Owner }
+            $projShort = if ($lock.Project.Length -gt 8) { $lock.Project.Substring(0, 5) + '...' } else { $lock.Project }
+            $color = if ($lock.IsStale) { 'Yellow' } else { 'Green' }
+            $lockLine = '    {0,-8} {1,-8} by {2,-8} for {3,-8}' -f $projShort, $lock.StoryId, $ownerShort, $ageStr
             $padding = 73 - $lockLine.Length
             Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
             Write-Host $lockLine -NoNewline -ForegroundColor $color
-            Write-Host (' ' * $padding) -NoNewline
+            Write-Host (' ' * [Math]::Max(0, $padding)) -NoNewline
             Write-Host ([char]0x2551) -ForegroundColor Blue
         }
-
         if ($locks.Count -gt 5) {
             $more = "    ... and $($locks.Count - 5) more"
             $padding = 73 - $more.Length

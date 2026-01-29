@@ -2247,6 +2247,119 @@ function Unregister-RalphGlobalInstance {
     return $true
 }
 
+# =============================================================================
+# MULTI-PROJECT DASHBOARD FUNCTIONS
+# =============================================================================
+
+<#
+.SYNOPSIS
+    Gets PRD status for a specific project root path.
+#>
+function Get-ProjectPrdStatus {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ProjectRoot
+    )
+    $prdFile = $null
+    $standardPath = Join-Path $ProjectRoot 'scripts' 'ralph' 'prd.json'
+    $claudePath = Join-Path $ProjectRoot '.claude' 'ralph' 'prd.json'
+    $altPath = Join-Path $ProjectRoot 'prd.json'
+    if (Test-Path $standardPath) { $prdFile = $standardPath }
+    elseif (Test-Path $claudePath) { $prdFile = $claudePath }
+    elseif (Test-Path $altPath) { $prdFile = $altPath }
+    if (-not $prdFile) { return @{ Total = 0; Complete = 0 } }
+    try {
+        $prd = Get-Content -Path $prdFile -Raw | ConvertFrom-Json
+        $total = @($prd.userStories).Count
+        $complete = @($prd.userStories | Where-Object { $_.passes -eq $true }).Count
+        return @{ Total = $total; Complete = $complete }
+    } catch {
+        return @{ Total = 0; Complete = 0 }
+    }
+}
+
+<#
+.SYNOPSIS
+    Gets PRD status for all unique projects from global instances.
+#>
+function Get-AllProjectsPrdStatus {
+    [CmdletBinding()]
+    [OutputType([array])]
+    param()
+    $instances = Get-RalphGlobalInstances -IncludeDead
+    $projectRoots = @($instances | ForEach-Object { $_.projectRoot } | Where-Object { $_ } | Sort-Object -Unique)
+    # Include local project
+    $localRoot = (Get-RalphPaths).ProjectRoot
+    if ($localRoot -and $localRoot -notin $projectRoots) {
+        $projectRoots += $localRoot
+    }
+    $results = @()
+    foreach ($pr in $projectRoots) {
+        if (-not $pr -or -not (Test-Path $pr)) { continue }
+        $name = Split-Path -Path $pr -Leaf
+        $status = Get-ProjectPrdStatus -ProjectRoot $pr
+        $results += @{
+            Name = $name
+            Total = $status.Total
+            Complete = $status.Complete
+            Root = $pr
+        }
+    }
+    return $results
+}
+
+<#
+.SYNOPSIS
+    Gets locks from all projects in global registry.
+#>
+function Get-AllProjectsLocks {
+    [CmdletBinding()]
+    [OutputType([array])]
+    param()
+    $instances = Get-RalphGlobalInstances -IncludeDead
+    $projectRoots = @($instances | ForEach-Object { $_.projectRoot } | Where-Object { $_ } | Sort-Object -Unique)
+    $localRoot = (Get-RalphPaths).ProjectRoot
+    if ($localRoot -and $localRoot -notin $projectRoots) {
+        $projectRoots += $localRoot
+    }
+    $results = @()
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    foreach ($pr in $projectRoots) {
+        if (-not $pr -or -not (Test-Path $pr)) { continue }
+        $locksDir = $null
+        $standardLocks = Join-Path $pr 'scripts' 'ralph' 'locks'
+        $claudeLocks = Join-Path $pr '.claude' 'ralph' 'locks'
+        if (Test-Path $standardLocks) { $locksDir = $standardLocks }
+        elseif (Test-Path $claudeLocks) { $locksDir = $claudeLocks }
+        if (-not $locksDir) { continue }
+        $pname = Split-Path -Path $pr -Leaf
+        Get-ChildItem -Path $locksDir -Directory -Filter '*.lock' -ErrorAction SilentlyContinue | ForEach-Object {
+            $storyId = $_.Name -replace '\.lock$', ''
+            $ownerFile = Join-Path $_.FullName 'owner.txt'
+            $ownerFileLegacy = Join-Path $_.FullName 'owner'
+            $tsFile = Join-Path $_.FullName 'timestamp.txt'
+            $tsFileLegacy = Join-Path $_.FullName 'timestamp'
+            $owner = 'unknown'; $ts = 0
+            if (Test-Path $ownerFile) { $owner = (Get-Content $ownerFile -Raw).Trim() }
+            elseif (Test-Path $ownerFileLegacy) { $owner = (Get-Content $ownerFileLegacy -Raw).Trim() }
+            if (Test-Path $tsFile) { $ts = [long](Get-Content $tsFile -Raw).Trim() }
+            elseif (Test-Path $tsFileLegacy) { $ts = [long](Get-Content $tsFileLegacy -Raw).Trim() }
+            $age = $now - $ts
+            $isStale = $age -gt 7200
+            $results += @{
+                StoryId = $storyId
+                Owner = $owner
+                Age = $age
+                IsStale = $isStale
+                IsDead = $false
+                Project = $pname
+            }
+        }
+    }
+    return $results
+}
 
 # Export all public functions
 Export-ModuleMember -Function @(
@@ -2298,4 +2411,9 @@ Export-ModuleMember -Function @(
     'Get-RalphGlobalLinkName'
     'Register-RalphGlobalInstance'
     'Unregister-RalphGlobalInstance'
+    'Get-RalphGlobalInstances'
+    # Multi-project dashboard functions
+    'Get-ProjectPrdStatus'
+    'Get-AllProjectsPrdStatus'
+    'Get-AllProjectsLocks'
 )

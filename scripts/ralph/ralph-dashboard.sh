@@ -199,23 +199,117 @@ truncate_string() {
 }
 
 # =============================================================================
+# MULTI-PROJECT HELPERS
+# =============================================================================
+
+# get_project_prd_status()
+# Gets PRD status for a specific project root
+get_project_prd_status() {
+    local project_root="$1"
+    local prd_file=""
+    if [[ -f "$project_root/scripts/ralph/prd.json" ]]; then
+        prd_file="$project_root/scripts/ralph/prd.json"
+    elif [[ -f "$project_root/.claude/ralph/prd.json" ]]; then
+        prd_file="$project_root/.claude/ralph/prd.json"
+    elif [[ -f "$project_root/prd.json" ]]; then
+        prd_file="$project_root/prd.json"
+    fi
+    if [[ -z "$prd_file" || ! -f "$prd_file" ]]; then
+        echo '{"total":0,"complete":0}'
+        return 0
+    fi
+    local prd_json total complete
+    prd_json=$(cat "$prd_file" 2>/dev/null) || { echo '{"total":0,"complete":0}'; return 0; }
+    total=$(echo "$prd_json" | jq '.userStories | length' 2>/dev/null || echo 0)
+    complete=$(echo "$prd_json" | jq '[.userStories[] | select(.passes == true)] | length' 2>/dev/null || echo 0)
+    jq -n --argjson t "$total" --argjson c "$complete" '{total:$t,complete:$c}'
+}
+
+# get_all_projects_prd_status()
+# Gets PRD status for all unique projects from global instances
+get_all_projects_prd_status() {
+    local instances_json project_roots local_root all_roots result
+    instances_json=$(get_ralph_global_instances "all" 2>/dev/null || echo "[]")
+    project_roots=$(echo "$instances_json" | jq -r '.[].projectRoot // empty' | sort -u)
+    local_root=$(get_project_root 2>/dev/null || echo "")
+    if [[ -n "$local_root" ]]; then
+        all_roots=$(printf "%s\n%s" "$project_roots" "$local_root" | sort -u | grep -v '^$')
+    else
+        all_roots="$project_roots"
+    fi
+    result="[]"
+    while IFS= read -r pr; do
+        [[ -z "$pr" || ! -d "$pr" ]] && continue
+        local name status total complete
+        name=$(basename "$pr")
+        status=$(get_project_prd_status "$pr")
+        total=$(echo "$status" | jq -r '.total')
+        complete=$(echo "$status" | jq -r '.complete')
+        result=$(echo "$result" | jq --arg n "$name" --argjson t "$total" --argjson c "$complete" --arg r "$pr" \
+            '. + [{name:$n,total:$t,complete:$c,root:$r}]')
+    done <<< "$all_roots"
+    echo "$result"
+}
+
+# get_all_projects_locks()
+# Gets locks from all projects in global registry
+get_all_projects_locks() {
+    local instances_json project_roots local_root all_roots result
+    instances_json=$(get_ralph_global_instances "all" 2>/dev/null || echo "[]")
+    project_roots=$(echo "$instances_json" | jq -r '.[].projectRoot // empty' | sort -u)
+    local_root=$(get_project_root 2>/dev/null || echo "")
+    if [[ -n "$local_root" ]]; then
+        all_roots=$(printf "%s\n%s" "$project_roots" "$local_root" | sort -u | grep -v '^$')
+    else
+        all_roots="$project_roots"
+    fi
+    result="[]"
+    while IFS= read -r pr; do
+        [[ -z "$pr" || ! -d "$pr" ]] && continue
+        local locks_dir=""
+        if [[ -d "$pr/scripts/ralph/locks" ]]; then
+            locks_dir="$pr/scripts/ralph/locks"
+        elif [[ -d "$pr/.claude/ralph/locks" ]]; then
+            locks_dir="$pr/.claude/ralph/locks"
+        fi
+        [[ -z "$locks_dir" ]] && continue
+        local pname now
+        pname=$(basename "$pr")
+        now=$(date +%s)
+        for lock_dir in "$locks_dir"/*.lock/; do
+            [[ -d "$lock_dir" ]] || continue
+            local sid owner ts age
+            sid=$(basename "$lock_dir" .lock)
+            owner="unknown"; ts=0
+            if [[ -f "$lock_dir/owner.txt" ]]; then
+                owner=$(cat "$lock_dir/owner.txt" | tr -d '\n')
+            elif [[ -f "$lock_dir/owner" ]]; then
+                owner=$(cat "$lock_dir/owner" | tr -d '\n')
+            fi
+            if [[ -f "$lock_dir/timestamp.txt" ]]; then
+                ts=$(cat "$lock_dir/timestamp.txt" | tr -d '\n')
+            elif [[ -f "$lock_dir/timestamp" ]]; then
+                ts=$(cat "$lock_dir/timestamp" | tr -d '\n')
+            fi
+            age=$((now - ts))
+            local is_stale="false"
+            [[ "$age" -gt 7200 ]] && is_stale="true"
+            result=$(echo "$result" | jq --arg s "$sid" --arg o "$owner" --argjson a "$age" \
+                --argjson stale "$is_stale" --arg p "$pname" \
+                '. + [{storyId:$s,owner:$o,age:$a,isStale:$stale,project:$p,isDead:false}]')
+        done
+    done <<< "$all_roots"
+    echo "$result"
+}
+
+# =============================================================================
 # RENDER FUNCTIONS
 # =============================================================================
 
 # render_header()
-# Renders the dashboard header with PRD progress
+# Renders the dashboard header with per-project PRD progress
 #
 render_header() {
-    local prd_json
-
-    # shellcheck disable=SC2119
-    if prd_json=$(read_prd_json 2>/dev/null); then
-        eval "$(get_prd_status "$prd_json")"
-    else
-        PRD_TOTAL=0
-        PRD_COMPLETE=0
-    fi
-
     # Top border
     write_colored blue "${BOX_TL}$(repeat_char "$BOX_H" $FRAME_WIDTH)${BOX_TR}"
 
@@ -229,15 +323,45 @@ render_header() {
     # Separator
     write_colored blue "${BOX_VR}$(repeat_char "$BOX_H" $FRAME_WIDTH)${BOX_VL}"
 
-    # Progress bar
-    local progress_bar
-    progress_bar=$(get_progress_bar "$PRD_COMPLETE" "$PRD_TOTAL")
-    local progress_text="  PRD Progress: $progress_bar ${PRD_COMPLETE}/${PRD_TOTAL}"
-    local progress_padding=$((FRAME_WIDTH - ${#progress_text}))
+    # Get all projects PRD status
+    local projects_status project_count
+    projects_status=$(get_all_projects_prd_status)
+    project_count=$(echo "$projects_status" | jq 'length')
 
-    write_colored blue "${BOX_V}" "-n"
-    printf "%s%*s" "$progress_text" "$progress_padding" ""
-    write_colored blue "${BOX_V}"
+    if [[ "$project_count" -eq 0 ]]; then
+        local empty_text="  No PRD files found"
+        local empty_padding=$((FRAME_WIDTH - ${#empty_text}))
+        write_colored blue "${BOX_V}" "-n"
+        write_colored gray "$empty_text" "-n"
+        printf "%*s" "$empty_padding" ""
+        write_colored blue "${BOX_V}"
+    else
+        # Show each project's progress
+        echo "$projects_status" | jq -c '.[]' | head -4 | while IFS= read -r project; do
+            [[ -z "$project" ]] && continue
+            local name total complete progress_bar progress_text progress_padding
+            name=$(echo "$project" | jq -r '.name')
+            total=$(echo "$project" | jq -r '.total')
+            complete=$(echo "$project" | jq -r '.complete')
+            # Truncate name if needed
+            [[ ${#name} -gt 12 ]] && name="${name:0:9}..."
+            progress_bar=$(get_progress_bar "$complete" "$total" 20)
+            progress_text="  $(printf '%-12s' "$name") $progress_bar ${complete}/${total}"
+            progress_padding=$((FRAME_WIDTH - ${#progress_text}))
+            write_colored blue "${BOX_V}" "-n"
+            printf "%s%*s" "$progress_text" "$progress_padding" ""
+            write_colored blue "${BOX_V}"
+        done
+        if [[ "$project_count" -gt 4 ]]; then
+            local more_count=$((project_count - 4))
+            local more_text="  ... and $more_count more projects"
+            local more_padding=$((FRAME_WIDTH - ${#more_text}))
+            write_colored blue "${BOX_V}" "-n"
+            write_colored gray "$more_text" "-n"
+            printf "%*s" "$more_padding" ""
+            write_colored blue "${BOX_V}"
+        fi
+    fi
 
     # Separator
     write_colored blue "${BOX_VR}$(repeat_char "$BOX_H" $FRAME_WIDTH)${BOX_VL}"
@@ -345,7 +469,7 @@ render_instances() {
 }
 
 # render_locks()
-# Renders the active locks section
+# Renders the active locks section from all projects
 #
 render_locks() {
     # Separator
@@ -359,11 +483,9 @@ render_locks() {
     printf "%*s" "$locks_header_padding" ""
     write_colored blue "${BOX_V}"
 
-    # Get locks
-    local locks_json
-    locks_json=$(get_ralph_story_locks 2>/dev/null || echo "[]")
-
-    local lock_count
+    # Get locks from all projects
+    local locks_json lock_count
+    locks_json=$(get_all_projects_locks 2>/dev/null || echo "[]")
     lock_count=$(echo "$locks_json" | jq 'length')
 
     if [[ "$lock_count" -eq 0 ]]; then
@@ -376,36 +498,19 @@ render_locks() {
     else
         echo "$locks_json" | jq -c '.[]' | head -5 | while IFS= read -r lock; do
             [[ -z "$lock" ]] && continue
-
-            local story_id owner age is_dead is_stale
-
+            local story_id owner age is_stale project age_str owner_short color lock_line lock_line_padding
             story_id=$(echo "$lock" | jq -r '.storyId // ""')
             owner=$(echo "$lock" | jq -r '.owner // ""')
             age=$(echo "$lock" | jq -r '.age // 0')
-            is_dead=$(echo "$lock" | jq -r '.isDead // false')
             is_stale=$(echo "$lock" | jq -r '.isStale // false')
-
-            local age_str
+            project=$(echo "$lock" | jq -r '.project // ""')
             age_str=$(format_duration "$age")
-
-            # Truncate owner
-            local owner_short
-            owner_short=$(truncate_string "$owner" 10)
-
-            # Determine color
-            local color
-            if [[ "$is_dead" == "true" ]]; then
-                color="red"
-            elif [[ "$is_stale" == "true" ]]; then
-                color="yellow"
-            else
-                color="green"
-            fi
-
-            local lock_line
-            lock_line=$(printf "    %-10s held by %-10s for %-10s" "$story_id" "$owner_short" "$age_str")
-            local lock_line_padding=$((FRAME_WIDTH - ${#lock_line}))
-
+            owner_short=$(truncate_string "$owner" 8)
+            project=$(truncate_string "$project" 8)
+            color="green"
+            [[ "$is_stale" == "true" ]] && color="yellow"
+            lock_line=$(printf "    %-8s %-8s by %-8s for %-8s" "$project" "$story_id" "$owner_short" "$age_str")
+            lock_line_padding=$((FRAME_WIDTH - ${#lock_line}))
             write_colored blue "${BOX_V}" "-n"
             write_colored "$color" "$lock_line" "-n"
             printf "%*s" "$lock_line_padding" ""
@@ -416,7 +521,6 @@ render_locks() {
             local more_count=$((lock_count - 5))
             local more_line="    ... and $more_count more"
             local more_padding=$((FRAME_WIDTH - ${#more_line}))
-
             write_colored blue "${BOX_V}" "-n"
             write_colored gray "$more_line" "-n"
             printf "%*s" "$more_padding" ""
