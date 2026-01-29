@@ -1828,6 +1828,14 @@ function Invoke-RalphCleanup {
         Write-Warning "Failed to release locks: $_"
     }
 
+    # Unregister from global registry (GM-003)
+    try {
+        $null = Unregister-RalphGlobalInstance
+    }
+    catch {
+        Write-Warning "Failed to unregister from global registry: $_"
+    }
+
     # Stash uncommitted changes
     try {
         $paths = Get-RalphPaths
@@ -1921,6 +1929,79 @@ function Initialize-RalphGlobalRegistry {
     }
 }
 
+# =============================================================================
+# GLOBAL INSTANCE REGISTRATION (GM-003)
+# =============================================================================
+
+function Get-RalphGlobalLinkName {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+    $paths = Get-RalphPaths
+    $projectName = Split-Path -Path $paths.ProjectRoot -Leaf
+    $instanceId = Get-RalphInstanceId
+    return "$projectName-$instanceId"
+}
+
+function Register-RalphGlobalInstance {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter()][hashtable]$InstancePaths)
+    if ($env:RALPH_GLOBAL_DISABLE -eq '1') { return $true }
+    if (-not (Initialize-RalphGlobalRegistry)) { return $false }
+    $gDir = Get-RalphGlobalDir
+    $iDir = Join-Path $gDir 'instances'
+    $lName = Get-RalphGlobalLinkName
+    if (-not $InstancePaths) {
+        $iId = Get-RalphInstanceId
+        $p = Get-RalphPaths
+        $instDir = Join-Path (Join-Path $p.RalphDir 'instances') $iId
+        $sFile = Join-Path $instDir 'status.json'
+    } else {
+        $instDir = $InstancePaths.InstanceDir
+        $sFile = $InstancePaths.StatusFile
+    }
+    $lPath = Join-Path $iDir $lName
+    try {
+        if (Test-Path $lPath) { Remove-Item $lPath -Force -Recurse -EA SilentlyContinue }
+        if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            $null = New-Item -Path $lPath -ItemType Junction -Target $instDir -EA Stop
+        } else {
+            $null = New-Item -Path $lPath -ItemType SymbolicLink -Target $instDir -EA Stop
+        }
+        Add-RalphInstanceLog "Registered in global registry: $lPath"
+        return $true
+    } catch {
+        Write-Warning "Junction/symlink failed: $_. Using fallback."
+        try {
+            if (-not (Test-Path $lPath)) { New-Item $lPath -ItemType Directory -Force | Out-Null }
+            if (Test-Path $sFile) { Copy-Item $sFile (Join-Path $lPath 'status.json') -Force }
+            Add-RalphInstanceLog "Registered in global (fallback): $lPath"
+            return $true
+        } catch { Write-Warning "Fallback failed: $_"; return $false }
+    }
+}
+
+function Unregister-RalphGlobalInstance {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+    if ($env:RALPH_GLOBAL_DISABLE -eq '1') { return $true }
+    $gDir = Get-RalphGlobalDir
+    $iDir = Join-Path $gDir 'instances'
+    $lName = Get-RalphGlobalLinkName
+    $lPath = Join-Path $iDir $lName
+    try {
+        if (Test-Path $lPath) {
+            Remove-Item -Path $lPath -Force -Recurse -ErrorAction Stop
+            Add-RalphInstanceLog "Unregistered from global registry"
+        }
+        return $true
+    } catch {
+        Write-Warning "Failed to unregister: $_"
+        return $false
+    }
+}
 
 # Export all public functions
 Export-ModuleMember -Function @(
@@ -1968,4 +2049,8 @@ Export-ModuleMember -Function @(
     # Global registry functions (GM-001)
     'Get-RalphGlobalDir'
     'Initialize-RalphGlobalRegistry'
+    # Global instance registration (GM-003)
+    'Get-RalphGlobalLinkName'
+    'Register-RalphGlobalInstance'
+    'Unregister-RalphGlobalInstance'
 )

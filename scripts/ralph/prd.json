@@ -50,7 +50,7 @@
         "$env:RALPH_GLOBAL_DISABLE=1 skips global registration",
         "Tests pass: junction created and resolves correctly"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "PowerShell implementation of global registration. Junction points work on NTFS without admin.",
       "claimedBy": null
     },
