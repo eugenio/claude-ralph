@@ -25,41 +25,96 @@ $script:RalphRoot = $PSScriptRoot
 
 .DESCRIPTION
     Returns a hashtable containing all relevant paths for ralph operations.
-    Uses $PSScriptRoot for reliable path resolution regardless of current working directory.
+    Supports external prd.json files for global usage.
+
+.PARAMETER PrdFile
+    Optional path to prd.json file. If specified, instance/lock paths are relative to its location.
+
+.PARAMETER ProjectRoot
+    Optional project root directory for git operations. Defaults to prd.json directory if PrdFile specified.
 
 .OUTPUTS
     System.Collections.Hashtable
     A hashtable with the following keys:
     - RalphDir: The ralph scripts directory
-    - ProjectRoot: The project root (two levels up from ralph)
+    - ProjectRoot: The project root for git operations
     - PrdFile: Path to prd.json
+    - PrdDir: Directory containing prd.json
     - ProgressFile: Path to progress.txt
     - PromptFile: Path to prompt.md
     - LogFile: Path to ralph.log
     - ArchiveDir: Path to archive directory
     - LastBranchFile: Path to .last-branch file
+    - InstancesDir: Path to instances directory
+    - LocksDir: Path to locks directory
 
 .EXAMPLE
     $paths = Get-RalphPaths
     Write-Host "PRD file is at: $($paths.PrdFile)"
+
+.EXAMPLE
+    $paths = Get-RalphPaths -PrdFile '/project/docs/prd.json' -ProjectRoot '/project'
+    Write-Host "Using external PRD at: $($paths.PrdFile)"
 #>
 function Get-RalphPaths {
     [CmdletBinding()]
     [OutputType([hashtable])]
-    param()
+    param(
+        [Parameter()]
+        [string]$PrdFile,
+
+        [Parameter()]
+        [string]$ProjectRoot
+    )
 
     $ralphDir = $script:RalphRoot
-    $projectRoot = Split-Path -Path (Split-Path -Path $ralphDir -Parent) -Parent
+
+    # Determine PRD file and its directory
+    if ($PrdFile -and (Test-Path $PrdFile)) {
+        $prdFilePath = Resolve-Path -Path $PrdFile | Select-Object -ExpandProperty Path
+        $prdDir = Split-Path -Path $prdFilePath -Parent
+    }
+    elseif ($PrdFile) {
+        # Path specified but doesn't exist - use it anyway (may be created later)
+        $prdFilePath = $PrdFile
+        $prdDir = Split-Path -Path $PrdFile -Parent
+        if (-not $prdDir) { $prdDir = $ralphDir }
+    }
+    else {
+        $prdFilePath = Join-Path $ralphDir 'prd.json'
+        $prdDir = $ralphDir
+    }
+
+    # Determine project root
+    if ($ProjectRoot -and (Test-Path $ProjectRoot)) {
+        $projectRootPath = Resolve-Path -Path $ProjectRoot | Select-Object -ExpandProperty Path
+    }
+    elseif ($ProjectRoot) {
+        $projectRootPath = $ProjectRoot
+    }
+    elseif ($env:RALPH_PROJECT_ROOT) {
+        $projectRootPath = $env:RALPH_PROJECT_ROOT
+    }
+    elseif ($PrdFile) {
+        # Default to prd.json directory when -PrdFile is specified
+        $projectRootPath = $prdDir
+    }
+    else {
+        $projectRootPath = Split-Path -Path (Split-Path -Path $ralphDir -Parent) -Parent
+    }
 
     return @{
         RalphDir       = $ralphDir
-        ProjectRoot    = $projectRoot
-        PrdFile        = Join-Path $ralphDir 'prd.json'
-        ProgressFile   = Join-Path $ralphDir 'progress.txt'
+        ProjectRoot    = $projectRootPath
+        PrdFile        = $prdFilePath
+        PrdDir         = $prdDir
+        ProgressFile   = Join-Path $prdDir 'progress.txt'
         PromptFile     = Join-Path $ralphDir 'prompt.md'
-        LogFile        = Join-Path $ralphDir 'ralph.log'
-        ArchiveDir     = Join-Path $ralphDir 'archive'
-        LastBranchFile = Join-Path $ralphDir '.last-branch'
+        LogFile        = Join-Path $prdDir 'ralph.log'
+        ArchiveDir     = Join-Path $prdDir 'archive'
+        LastBranchFile = Join-Path $prdDir '.last-branch'
+        InstancesDir   = Join-Path $prdDir 'instances'
+        LocksDir       = Join-Path $prdDir 'locks'
     }
 }
 
