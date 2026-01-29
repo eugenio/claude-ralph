@@ -1,337 +1,370 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ralph-parallel.sh - Launch multiple Ralph instances in parallel
+# ralph-parallel.sh - Launch and manage multiple Ralph instances in parallel
 # =============================================================================
 #
 # DESCRIPTION:
-#   Launches multiple Ralph instances for parallel story processing.
-#   Manages instance lifecycle with start, stop, and status commands.
+#   Provides commands to start, stop, and monitor multiple concurrent Ralph
+#   instances using bash background processes.
 #
 # USAGE:
-#   ./ralph-parallel.sh [command] [args]
+#   ./ralph-parallel.sh <command> [options]
 #
 # COMMANDS:
-#   <N>             Launch N instances (default: CPU cores / 2)
-#   stop            Stop all running instances gracefully
-#   kill            Force kill all running instances
-#   status          Show running instances
-#   dashboard       Launch dashboard to monitor instances
-#   help            Show this help
+#   start     Launch Ralph instances (default: CPU cores / 2)
+#   stop      Stop all running instances gracefully (SIGTERM)
+#   kill      Force kill all instances (SIGKILL)
+#   status    Show running instance status
+#   dashboard Open monitoring dashboard
+#   help      Show this help
 #
-# EXAMPLES:
-#   ./ralph-parallel.sh 3       # Launch 3 instances
-#   ./ralph-parallel.sh stop    # Stop all instances
-#   ./ralph-parallel.sh status  # Show status
+# OPTIONS:
+#   -c, --count N         Number of instances to launch (default: CPU cores / 2)
+#   -m, --max-iterations  Max iterations per instance (default: 10)
 #
 # ENVIRONMENT:
-#   RALPH_MAX_INSTANCES  Maximum instances to launch (default: 8)
-#   RALPH_ITERATIONS     Max iterations per instance (default: 10)
+#   RALPH_MAX_INSTANCES   Maximum instances allowed (default: 8)
+#   RALPH_ITERATIONS      Default max iterations (default: 10)
 #
-# REQUIREMENTS:
-#   - Bash 4.0+
-#   - jq (for JSON parsing)
+# EXAMPLES:
+#   ./ralph-parallel.sh start -c 3           # Launch 3 instances
+#   ./ralph-parallel.sh start --count 2 -m 5 # 2 instances, 5 iterations each
+#   ./ralph-parallel.sh stop                  # Stop all instances
+#   ./ralph-parallel.sh status                # Show running status
 #
 # =============================================================================
 
-set -euo pipefail
-
-# Script directory
+# Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source shared utilities
+if [[ ! -f "$SCRIPT_DIR/ralph-utils.sh" ]]; then
+    echo "Error: ralph-utils.sh not found in script directory" >&2
+    exit 1
+fi
 # shellcheck source=ralph-utils.sh
 source "$SCRIPT_DIR/ralph-utils.sh"
+
+# Load paths
+eval "$(get_ralph_paths)"
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
-# Load paths
-eval "$(get_ralph_paths)"
-
-PIDS_FILE="$INSTANCES_DIR/running.pids"
+JOBS_FILE="$INSTANCES_DIR/running-jobs.json"
+MAX_INSTANCES="${RALPH_MAX_INSTANCES:-8}"
+DEFAULT_ITERATIONS="${RALPH_ITERATIONS:-10}"
 
 # =============================================================================
-# HELPER FUNCTIONS
+# UTILITY FUNCTIONS
 # =============================================================================
-
-show_help() {
-    echo ""
-    write_colored cyan "Usage: ./ralph-parallel.sh <command> [args]"
-    echo ""
-    write_colored yellow "Commands:"
-    echo "  <N>             Launch N instances (default: CPU cores / 2)"
-    echo "  stop            Stop all running instances gracefully"
-    echo "  kill            Force kill all running instances"
-    echo "  status          Show running instances"
-    echo "  dashboard       Launch dashboard to monitor instances"
-    echo "  help            Show this help"
-    echo ""
-    write_colored yellow "Examples:"
-    echo "  ./ralph-parallel.sh 3       # Launch 3 instances"
-    echo "  ./ralph-parallel.sh stop    # Stop all instances"
-    echo "  ./ralph-parallel.sh status  # Show status"
-    echo ""
-    write_colored yellow "Environment Variables:"
-    echo "  RALPH_MAX_INSTANCES  Maximum instances to launch (default: 8)"
-    echo "  RALPH_ITERATIONS     Max iterations per instance (default: 10)"
-    echo ""
-}
-
-get_cpu_count() {
-    if command -v nproc &>/dev/null; then
-        nproc
-    elif [[ -f /proc/cpuinfo ]]; then
-        grep -c ^processor /proc/cpuinfo
-    elif command -v sysctl &>/dev/null; then
-        sysctl -n hw.ncpu 2>/dev/null || echo "4"
-    else
-        echo "4"
-    fi
-}
 
 get_default_count() {
-    local cpus
-    cpus=$(get_cpu_count)
-    local default=$((cpus / 2))
+    local cpu_count
+    cpu_count=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+    local default=$((cpu_count / 2))
     [[ "$default" -lt 1 ]] && default=1
     echo "$default"
 }
 
-save_pid() {
-    local pid="$1"
+ensure_instances_dir() {
     mkdir -p "$INSTANCES_DIR"
-    echo "$pid" >> "$PIDS_FILE"
 }
 
-load_pids() {
-    if [[ -f "$PIDS_FILE" ]]; then
-        sort -u "$PIDS_FILE"
+save_jobs() {
+    local jobs_json="$1"
+    ensure_instances_dir
+    echo "$jobs_json" > "$JOBS_FILE"
+}
+
+get_saved_jobs() {
+    if [[ ! -f "$JOBS_FILE" ]]; then
+        echo "[]"
+        return 0
     fi
+
+    local content
+    content=$(cat "$JOBS_FILE" 2>/dev/null)
+    if [[ -z "$content" ]]; then
+        echo "[]"
+        return 0
+    fi
+
+    # Validate JSON
+    if ! echo "$content" | jq '.' &>/dev/null; then
+        echo "[]"
+        return 0
+    fi
+
+    echo "$content"
 }
 
-clean_pids() {
-    local active_pids=""
-    local pid
-    for pid in $(load_pids); do
-        if kill -0 "$pid" 2>/dev/null; then
-            active_pids="${active_pids}${pid}"$'\n'
-        fi
-    done
-
-    mkdir -p "$INSTANCES_DIR"
-    echo "$active_pids" | grep -v '^$' > "$PIDS_FILE" 2>/dev/null || true
+is_process_running() {
+    local pid="$1"
+    kill -0 "$pid" 2>/dev/null
 }
 
 # =============================================================================
 # COMMAND FUNCTIONS
 # =============================================================================
 
-cmd_launch() {
-    local count="${1:-$(get_default_count)}"
-    local max_instances="${RALPH_MAX_INSTANCES:-8}"
-    local iterations="${RALPH_ITERATIONS:-10}"
+show_help() {
+    echo ""
+    write_colored cyan "Usage: ./ralph-parallel.sh <Command> [Options]"
+    echo ""
+    write_colored yellow "Commands:"
+    echo "  start [-c N] [-m M]  Launch N instances with M max iterations"
+    echo "  stop                 Stop all instances gracefully (SIGTERM)"
+    echo "  kill                 Force kill all instances (SIGKILL)"
+    echo "  status               Show running instances"
+    echo "  dashboard            Open monitoring dashboard"
+    echo "  help                 Show this help"
+    echo ""
+    write_colored yellow "Options:"
+    echo "  -c, --count N        Number of instances (default: CPU cores / 2)"
+    echo "  -m, --max-iterations Max iterations per instance (default: 10)"
+    echo ""
+    write_colored yellow "Examples:"
+    echo "  ./ralph-parallel.sh start -c 3"
+    echo "  ./ralph-parallel.sh stop"
+    echo "  ./ralph-parallel.sh status"
+    echo ""
+    write_colored yellow "Environment Variables:"
+    echo "  RALPH_MAX_INSTANCES  Maximum instances allowed (default: 8)"
+    echo "  RALPH_ITERATIONS     Default max iterations (default: 10)"
+    echo ""
+}
 
-    # Validate count
-    if ! [[ "$count" =~ ^[0-9]+$ ]]; then
-        write_colored red "Error: Invalid count '$count'"
+cmd_start() {
+    local count="$1"
+    local max_iterations="$2"
+
+    # Default count to CPU cores / 2
+    if [[ -z "$count" || "$count" -le 0 ]]; then
+        count=$(get_default_count)
+    fi
+
+    # Default max iterations
+    if [[ -z "$max_iterations" || "$max_iterations" -le 0 ]]; then
+        max_iterations="$DEFAULT_ITERATIONS"
+    fi
+
+    # Enforce max instances
+    if [[ "$count" -gt "$MAX_INSTANCES" ]]; then
+        write_colored yellow "Warning: Limiting to $MAX_INSTANCES instances (RALPH_MAX_INSTANCES)"
+        count="$MAX_INSTANCES"
+    fi
+
+    echo ""
+    write_colored blue "$(printf '═%.0s' {1..55})"
+    write_colored cyan "         RALPH PARALLEL LAUNCHER"
+    write_colored blue "$(printf '═%.0s' {1..55})"
+    echo ""
+    echo "Launching $count instances with $max_iterations iterations each..."
+    echo ""
+
+    local ralph_script="$SCRIPT_DIR/ralph.sh"
+    if [[ ! -f "$ralph_script" ]]; then
+        write_colored red "Error: ralph.sh not found"
         exit 1
     fi
 
-    if [[ "$count" -gt "$max_instances" ]]; then
-        write_colored yellow "Warning: Limiting to $max_instances instances (RALPH_MAX_INSTANCES)"
-        count="$max_instances"
-    fi
+    ensure_instances_dir
+    local jobs_json="[]"
 
-    if [[ "$count" -lt 1 ]]; then
-        write_colored red "Error: Count must be at least 1"
-        exit 1
-    fi
-
-    write_colored blue "╔═══════════════════════════════════════════════════════╗"
-    echo -e "${COLOR_BLUE}║${COLOR_RESET}         ${COLOR_CYAN}RALPH PARALLEL LAUNCHER${COLOR_RESET}                       ${COLOR_BLUE}║${COLOR_RESET}"
-    write_colored blue "╚═══════════════════════════════════════════════════════╝"
-    echo ""
-    echo -e "Launching ${COLOR_GREEN}$count${COLOR_RESET} instances with ${COLOR_GREEN}$iterations${COLOR_RESET} iterations each..."
-    echo ""
-
-    mkdir -p "$INSTANCES_DIR"
-
-    local i
-    for i in $(seq 1 "$count"); do
-        # Small delay between launches to avoid race conditions
-        [[ "$i" -gt 1 ]] && sleep 1
-
+    for ((i = 1; i <= count; i++)); do
         write_colored cyan "  Starting instance $i/$count..."
 
-        # Launch in background with nohup
-        nohup "$SCRIPT_DIR/ralph.sh" "$iterations" \
-            > /dev/null 2>&1 &
+        # Small delay between launches to avoid lock contention
+        if [[ "$i" -gt 1 ]]; then
+            sleep 1
+        fi
 
+        # Launch in background
+        local log_file="$INSTANCES_DIR/parallel-$i-$$.log"
+        "$ralph_script" "$max_iterations" > "$log_file" 2>&1 &
         local pid=$!
-        save_pid "$pid"
 
-        echo -e "    ${COLOR_GREEN}✓${COLOR_RESET} PID: $pid"
+        # Record job info
+        local start_time
+        start_time=$(date '+%Y-%m-%d %H:%M:%S')
+
+        jobs_json=$(echo "$jobs_json" | jq \
+            --argjson pid "$pid" \
+            --arg start_time "$start_time" \
+            --argjson iterations "$max_iterations" \
+            --arg log_file "$log_file" \
+            --argjson index "$i" \
+            '. += [{
+                pid: $pid,
+                index: $index,
+                startTime: $start_time,
+                iterations: $iterations,
+                logFile: $log_file
+            }]')
+
+        write_colored green "    PID: $pid"
     done
+
+    save_jobs "$jobs_json"
 
     echo ""
     write_colored green "Launched $count instances"
     echo ""
-    echo "Monitor with:"
-    echo "  $0 status"
-    echo "  $SCRIPT_DIR/ralph-dashboard.sh"
+    write_colored yellow "Monitor with:"
+    echo "  ./ralph-parallel.sh status"
+    echo "  ./ralph-parallel.sh dashboard"
     echo ""
-    echo "Stop with:"
-    echo "  $0 stop"
+    write_colored yellow "Stop with:"
+    echo "  ./ralph-parallel.sh stop"
+    echo ""
 }
 
 cmd_stop() {
     write_colored yellow "Stopping all Ralph instances..."
 
-    clean_pids
-    local pids
-    pids=$(load_pids)
-    local count=0
+    local saved_jobs stopped=0
+    saved_jobs=$(get_saved_jobs)
 
-    local pid
+    # Stop jobs from our tracking file
+    local pids
+    pids=$(echo "$saved_jobs" | jq -r '.[].pid')
+
     for pid in $pids; do
-        if kill -0 "$pid" 2>/dev/null; then
-            echo "  Sending SIGTERM to PID $pid..."
+        if is_process_running "$pid"; then
+            write_colored gray "  Stopping PID $pid..."
             kill -TERM "$pid" 2>/dev/null || true
-            ((count++)) || true
+            ((stopped++)) || true
         fi
     done
 
-    if [[ "$count" -eq 0 ]]; then
+    # Also try to find any ralph.sh processes we might have missed
+    # Using pgrep to find ralph.sh processes (excluding ourselves)
+    local ralph_pids
+    ralph_pids=$(pgrep -f "ralph\.sh" 2>/dev/null || true)
+
+    for pid in $ralph_pids; do
+        # Skip our own PID
+        [[ "$pid" == "$$" ]] && continue
+
+        if is_process_running "$pid"; then
+            write_colored gray "  Stopping PID $pid..."
+            kill -TERM "$pid" 2>/dev/null || true
+            ((stopped++)) || true
+        fi
+    done
+
+    if [[ "$stopped" -eq 0 ]]; then
         write_colored green "No running instances found"
     else
-        echo ""
-        write_colored yellow "Sent SIGTERM to $count instances"
-        echo "Waiting for graceful shutdown (10s timeout)..."
-
-        # Wait for processes to exit
-        local timeout=10
-        local waited=0
-        while [[ "$waited" -lt "$timeout" ]]; do
-            sleep 1
-            ((waited++)) || true
-
-            local still_running=0
-            for pid in $pids; do
-                if kill -0 "$pid" 2>/dev/null; then
-                    ((still_running++)) || true
-                fi
-            done
-
-            if [[ "$still_running" -eq 0 ]]; then
-                break
-            fi
-
-            echo "  Still running: $still_running"
-        done
-
-        # Check if any still running
-        local remaining=0
-        for pid in $pids; do
-            if kill -0 "$pid" 2>/dev/null; then
-                ((remaining++)) || true
-            fi
-        done
-
-        if [[ "$remaining" -gt 0 ]]; then
-            write_colored yellow "$remaining instances still running. Use '$0 kill' to force kill."
-        else
-            write_colored green "All instances stopped"
-        fi
+        write_colored green "Stopped $stopped instances"
     fi
 
-    # Clean up PID file
-    clean_pids
+    # Clear jobs file
+    save_jobs "[]"
 }
 
 cmd_kill() {
     write_colored red "Force killing all Ralph instances..."
 
-    clean_pids
-    local pids
-    pids=$(load_pids)
-    local count=0
+    local killed=0
 
-    local pid
+    # Kill jobs from our tracking file
+    local saved_jobs pids
+    saved_jobs=$(get_saved_jobs)
+    pids=$(echo "$saved_jobs" | jq -r '.[].pid')
+
     for pid in $pids; do
-        if kill -0 "$pid" 2>/dev/null; then
-            echo "  Sending SIGKILL to PID $pid..."
+        if is_process_running "$pid"; then
+            write_colored gray "  Killing PID $pid..."
             kill -KILL "$pid" 2>/dev/null || true
-            ((count++)) || true
+            ((killed++)) || true
         fi
     done
 
-    # Also kill any claude processes started by ralph
-    pkill -f "claude -p --dangerously-skip-permissions" 2>/dev/null || true
+    # Kill any ralph.sh processes
+    local ralph_pids
+    ralph_pids=$(pgrep -f "ralph\.sh" 2>/dev/null || true)
 
-    if [[ "$count" -eq 0 ]]; then
-        write_colored green "No running instances found"
-    else
-        write_colored red "Killed $count instances"
-    fi
+    for pid in $ralph_pids; do
+        [[ "$pid" == "$$" ]] && continue
 
-    # Clear PID file
-    : > "$PIDS_FILE"
+        if is_process_running "$pid"; then
+            write_colored gray "  Killing PID $pid..."
+            kill -KILL "$pid" 2>/dev/null || true
+            ((killed++)) || true
+        fi
+    done
+
+    # Also try to kill any claude processes
+    local claude_pids
+    claude_pids=$(pgrep -f "claude" 2>/dev/null || true)
+
+    for pid in $claude_pids; do
+        kill -KILL "$pid" 2>/dev/null || true
+    done
+
+    write_colored red "All instances killed"
+
+    # Clear jobs file
+    save_jobs "[]"
 }
 
 cmd_status() {
-    write_colored blue "╔═══════════════════════════════════════════════════════╗"
-    echo -e "${COLOR_BLUE}║${COLOR_RESET}         ${COLOR_CYAN}RALPH PARALLEL STATUS${COLOR_RESET}                         ${COLOR_BLUE}║${COLOR_RESET}"
-    write_colored blue "╚═══════════════════════════════════════════════════════╝"
+    echo ""
+    write_colored blue "$(printf '═%.0s' {1..55})"
+    write_colored cyan "         RALPH PARALLEL STATUS"
+    write_colored blue "$(printf '═%.0s' {1..55})"
     echo ""
 
-    clean_pids
-    local pids
-    pids=$(load_pids)
-    local running=0
-    local total=0
+    local saved_jobs running=0 total
+    saved_jobs=$(get_saved_jobs)
+    total=$(echo "$saved_jobs" | jq 'length')
 
-    printf "%-10s %-10s %-12s %-10s\n" "PID" "STATUS" "INSTANCE" "STATE"
-    printf "%-10s %-10s %-12s %-10s\n" "---" "------" "--------" "-----"
+    # Print header
+    printf "${COLOR_WHITE}%-8s %-10s %-12s %-15s${COLOR_RESET}\n" "PID" "STATUS" "INSTANCE" "STATE"
+    printf "%-8s %-10s %-12s %-15s\n" "------" "------" "--------" "-----"
 
-    local pid
-    for pid in $pids; do
-        ((total++)) || true
-        local status="stopped"
-        local instance="-"
-        local state="-"
+    # Process each job
+    echo "$saved_jobs" | jq -c '.[]' | while read -r job; do
+        local pid status color instance_id state
+        pid=$(echo "$job" | jq -r '.pid')
 
-        if kill -0 "$pid" 2>/dev/null; then
-            status="${COLOR_GREEN}running${COLOR_RESET}"
-            ((running++)) || true
-
-            # Try to find instance info
-            local dir
-            for dir in "$INSTANCES_DIR"/*; do
-                [[ -d "$dir" ]] || continue
-                local status_file="$dir/status.json"
-                if [[ -f "$status_file" ]]; then
-                    local file_pid
-                    file_pid=$(jq -r '.pid // 0' "$status_file" 2>/dev/null || echo "0")
-                    if [[ "$file_pid" == "$pid" ]]; then
-                        instance=$(basename "$dir")
-                        instance="${instance:0:10}"
-                        state=$(jq -r '.state // "-"' "$status_file" 2>/dev/null || echo "-")
-                        break
-                    fi
-                fi
-            done
+        if is_process_running "$pid"; then
+            status="Running"
+            color="$COLOR_GREEN"
         else
-            status="${COLOR_GRAY}stopped${COLOR_RESET}"
+            status="Gone"
+            color="$COLOR_GRAY"
         fi
 
-        printf "%-10s %b  %-12s %-10s\n" "$pid" "$status" "$instance" "$state"
+        # Try to find instance info (placeholder for now)
+        instance_id="-"
+        state="-"
+
+        printf "${color}%-8s${COLOR_RESET} " "$pid"
+        printf "${color}%-10s${COLOR_RESET} " "$status"
+        printf "%-12s %-15s\n" "$instance_id" "$state"
+    done
+
+    # Count running
+    local pids
+    pids=$(echo "$saved_jobs" | jq -r '.[].pid')
+    for pid in $pids; do
+        if is_process_running "$pid"; then
+            ((running++)) || true
+        fi
     done
 
     echo ""
-    echo -e "Running: ${COLOR_GREEN}$running${COLOR_RESET}/$total"
+    if [[ "$running" -gt 0 ]]; then
+        write_colored green "Running: $running/$total"
+    else
+        write_colored gray "Running: $running/$total"
+    fi
 
-    # Show active locks
+    # Show locks
     local locks_json lock_count
     locks_json=$(get_ralph_story_locks)
     lock_count=$(echo "$locks_json" | jq 'length')
@@ -342,22 +375,68 @@ cmd_status() {
         eval "$(get_prd_status)"
         echo "PRD progress: $PRD_COMPLETE/$PRD_TOTAL stories"
     fi
+
+    echo ""
 }
 
 cmd_dashboard() {
-    exec "$SCRIPT_DIR/ralph-dashboard.sh"
+    local dashboard_script="$SCRIPT_DIR/ralph-dashboard.sh"
+    if [[ -f "$dashboard_script" ]]; then
+        exec "$dashboard_script"
+    else
+        write_colored red "Dashboard script not found"
+        exit 1
+    fi
 }
 
 # =============================================================================
-# MAIN
+# ARGUMENT PARSING
 # =============================================================================
 
-main() {
-    local command="${1:-}"
+parse_args() {
+    local command=""
+    local count=0
+    local max_iterations=0
 
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            start|stop|kill|status|dashboard|help)
+                command="$1"
+                shift
+                ;;
+            -c|--count)
+                count="$2"
+                shift 2
+                ;;
+            -m|--max-iterations)
+                max_iterations="$2"
+                shift 2
+                ;;
+            -h|--help)
+                command="help"
+                shift
+                ;;
+            *)
+                # Unknown option, might be count for backwards compatibility
+                if [[ "$1" =~ ^[0-9]+$ && -z "$count" ]]; then
+                    count="$1"
+                else
+                    write_colored red "Unknown option: $1"
+                    show_help
+                    exit 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Default command is status
+    [[ -z "$command" ]] && command="status"
+
+    # Execute command
     case "$command" in
-        ""|[0-9]*)
-            cmd_launch "$command"
+        start)
+            cmd_start "$count" "$max_iterations"
             ;;
         stop)
             cmd_stop
@@ -371,18 +450,27 @@ main() {
         dashboard)
             cmd_dashboard
             ;;
-        -h|--help|help)
+        help)
             show_help
             ;;
         *)
-            write_colored red "Unknown command: $command"
             show_help
-            exit 1
             ;;
     esac
 }
 
-# Run main only if script is executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+# =============================================================================
+# MAIN
+# =============================================================================
+
+main() {
+    # Check dependencies
+    if ! command -v jq &>/dev/null; then
+        write_colored red "Error: jq is required. Install with: apt install jq (or brew install jq)"
+        exit 1
+    fi
+
+    parse_args "$@"
+}
+
+main "$@"

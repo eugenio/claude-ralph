@@ -12,6 +12,12 @@
 .PARAMETER MaxIterations
     Maximum number of iterations to run. Defaults to 10.
 
+.PARAMETER PrdFile
+    Path to the prd.json file. Defaults to prd.json in the script directory.
+
+.PARAMETER ProjectRoot
+    Project root directory for git operations. Defaults to the prd.json directory.
+
 .EXAMPLE
     ./ralph.ps1
     Runs with default 10 iterations.
@@ -21,8 +27,12 @@
     Runs with maximum 20 iterations.
 
 .EXAMPLE
-    ./ralph.ps1 5
-    Runs with maximum 5 iterations (positional parameter).
+    ./ralph.ps1 -PrdFile /path/to/project/prd.json -MaxIterations 10
+    Runs using an external prd.json file.
+
+.EXAMPLE
+    ./ralph.ps1 -PrdFile /project/docs/prd.json -ProjectRoot /project
+    Specifies both prd.json location and project root.
 
 .NOTES
     Requires:
@@ -35,7 +45,15 @@
 param(
     [Parameter(Position = 0)]
     [ValidateRange(1, [int]::MaxValue)]
-    [int]$MaxIterations = 10
+    [int]$MaxIterations = 10,
+
+    [Parameter()]
+    [Alias('p')]
+    [string]$PrdFile,
+
+    [Parameter()]
+    [Alias('r')]
+    [string]$ProjectRoot
 )
 
 # Import the shared utilities module
@@ -46,8 +64,8 @@ if (-not (Test-Path $modulePath)) {
 }
 Import-Module $modulePath -Force
 
-# Get paths
-$paths = Get-RalphPaths
+# Get paths (with optional overrides)
+$paths = Get-RalphPaths -PrdFile $PrdFile -ProjectRoot $ProjectRoot
 
 # Script-level variables for multi-instance
 $script:InstancePaths = $null
@@ -303,8 +321,8 @@ function Main {
     $script:InstancePaths = New-RalphInstanceDirectory
     Register-RalphCleanup
 
-    # Register in global registry (GM-003)
-    $null = Register-RalphGlobalInstance -InstancePaths $script:InstancePaths
+    # Register in global registry (PS-004)
+    $null = Register-RalphGlobalInstance
 
     # Show banner
     Show-Banner
@@ -395,7 +413,7 @@ function Main {
                 Add-RalphInstanceLog "Claude Code exited with code $($result.ExitCode)"
                 Write-ColoredOutput "Claude Code failed with exit code $($result.ExitCode)" -Color Red
                 Write-ColoredOutput 'Releasing story and continuing...' -Color Yellow
-                Release-RalphStoryClaim -StoryId $story.id
+                Remove-RalphStoryClaim -StoryId $story.id
                 $script:CurrentStoryId = $null
             }
         }
@@ -403,7 +421,7 @@ function Main {
             Add-RalphInstanceLog "Error running Claude Code: $_"
             Write-ColoredOutput "Error running Claude Code: $_" -Color Red
             Write-ColoredOutput 'Releasing story and continuing...' -Color Yellow
-            Release-RalphStoryClaim -StoryId $story.id
+            Remove-RalphStoryClaim -StoryId $story.id
             $script:CurrentStoryId = $null
             continue
         }
@@ -426,7 +444,7 @@ function Main {
             $null = Merge-RalphStoryBranch -StoryId $story.id
 
             # Release claim
-            Release-RalphStoryClaim -StoryId $story.id
+            Remove-RalphStoryClaim -StoryId $story.id
             $script:CurrentStoryId = $null
         }
 
@@ -477,7 +495,7 @@ function Main {
 
     # Release any held story
     if ($script:CurrentStoryId) {
-        Release-RalphStoryClaim -StoryId $script:CurrentStoryId
+        Remove-RalphStoryClaim -StoryId $script:CurrentStoryId
     }
 }
 

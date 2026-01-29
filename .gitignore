@@ -28,5 +28,8 @@ Thumbs.db
 *.swp
 *.swo
 
+# Claude Code local settings
+.claude/
+
 # Node (if using any JS tooling)
 node_modules/

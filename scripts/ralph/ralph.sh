@@ -1,25 +1,102 @@
 #!/bin/bash
 # claude-ralph - Autonomous AI agent loop for Claude Code
 # Multi-instance version with isolation, locking, and feature branches
-# Usage: ./ralph.sh [max_iterations]
+# Usage: ./ralph.sh [options] [max_iterations]
+#
+# Options:
+#   -p, --prd PATH       Path to prd.json file (default: ./prd.json in script dir)
+#   -r, --project PATH   Project root directory (default: prd.json directory)
+#   -h, --help           Show this help message
 
 set -e
 
-MAX_ITERATIONS=${1:-10}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# PROJECT_ROOT can be overridden via environment, defaults to SCRIPT_DIR for self-contained repos
-PROJECT_ROOT="${RALPH_PROJECT_ROOT:-$SCRIPT_DIR}"
 
-# Shared files (with locking)
-PRD_FILE="$SCRIPT_DIR/prd.json"
-PRD_LOCK="$SCRIPT_DIR/.prd.lock"
+# Default values
+MAX_ITERATIONS=10
+PRD_PATH=""
+PROJECT_PATH=""
+
+# Parse arguments
+show_help() {
+    cat << EOF
+Usage: ./ralph.sh [options] [max_iterations]
+
+Options:
+  -p, --prd PATH       Path to prd.json file (default: ./prd.json in script dir)
+  -r, --project PATH   Project root directory (default: prd.json directory)
+  -h, --help           Show this help message
+
+Examples:
+  ./ralph.sh 20                              # Run 20 iterations with local prd.json
+  ./ralph.sh --prd /path/to/prd.json 10      # Use external prd.json
+  ./ralph.sh -p /project/prd.json -r /project # Specify both prd and project root
+EOF
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -p|--prd)
+            PRD_PATH="$2"
+            shift 2
+            ;;
+        -r|--project)
+            PROJECT_PATH="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            show_help
+            ;;
+        *)
+            # Positional argument - max iterations
+            if [[ "$1" =~ ^[0-9]+$ ]]; then
+                MAX_ITERATIONS="$1"
+            else
+                echo "Invalid max_iterations: $1" >&2
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Resolve PRD file path
+if [ -n "$PRD_PATH" ]; then
+    # Use provided path (resolve to absolute)
+    PRD_FILE="$(cd "$(dirname "$PRD_PATH")" && pwd)/$(basename "$PRD_PATH")"
+    PRD_DIR="$(dirname "$PRD_FILE")"
+else
+    # Default: look in script directory
+    PRD_FILE="$SCRIPT_DIR/prd.json"
+    PRD_DIR="$SCRIPT_DIR"
+fi
+
+# Resolve project root
+if [ -n "$PROJECT_PATH" ]; then
+    PROJECT_ROOT="$(cd "$PROJECT_PATH" && pwd)"
+elif [ -n "${RALPH_PROJECT_ROOT:-}" ]; then
+    PROJECT_ROOT="$RALPH_PROJECT_ROOT"
+elif [ -n "$PRD_PATH" ]; then
+    # Default to prd.json directory when --prd is specified
+    PROJECT_ROOT="$PRD_DIR"
+else
+    PROJECT_ROOT="$SCRIPT_DIR"
+fi
+
+# Shared files (with locking) - relative to PRD location
+PRD_LOCK="$PRD_DIR/.prd.lock"
 PROMPT_FILE="$SCRIPT_DIR/prompt.md"
-ARCHIVE_DIR="$SCRIPT_DIR/archive"
-LAST_BRANCH_FILE="$SCRIPT_DIR/.last-branch"
+ARCHIVE_DIR="$PRD_DIR/archive"
+LAST_BRANCH_FILE="$PRD_DIR/.last-branch"
 
-# Multi-instance directories
-INSTANCES_DIR="$SCRIPT_DIR/instances"
-LOCKS_DIR="$SCRIPT_DIR/locks"
+# Multi-instance directories (relative to PRD location for project isolation)
+INSTANCES_DIR="$PRD_DIR/instances"
+LOCKS_DIR="$PRD_DIR/locks"
 
 # Global registry directory (GM-001)
 # Override with RALPH_GLOBAL_DIR environment variable
@@ -135,6 +212,9 @@ EOF
 
     # Initialize status file
     update_status "starting" ""
+
+    # Register in global registry (GM-004)
+    register_ralph_global_instance
 
     log "Instance initialized: $INSTANCE_ID"
     log "Instance directory: $INSTANCE_DIR"
@@ -488,11 +568,45 @@ get_ralph_global_link_name() {
     echo "${project_name}-${INSTANCE_ID}"
 }
 
+register_ralph_global_instance() {
+    # Skip if disabled
+    [[ "${RALPH_GLOBAL_DISABLE:-0}" == "1" ]] && return 0
+
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    local instances_dir="$global_dir/instances"
+    local link_name
+    link_name=$(get_ralph_global_link_name)
+    local link_path="$instances_dir/$link_name"
+
+    # Ensure global instances directory exists
+    if [[ ! -d "$instances_dir" ]]; then
+        mkdir -p "$instances_dir" 2>/dev/null || return 1
+        chmod 700 "$global_dir" 2>/dev/null || true
+        chmod 700 "$instances_dir" 2>/dev/null || true
+    fi
+
+    # Remove existing link if present (in case of stale symlink)
+    if [[ -L "$link_path" || -e "$link_path" ]]; then
+        rm -f "$link_path" 2>/dev/null || true
+    fi
+
+    # Create symlink pointing to instance directory
+    if ln -s "$INSTANCE_DIR" "$link_path" 2>/dev/null; then
+        log "Registered in global registry: $link_name"
+        return 0
+    else
+        log "Warning: Failed to register in global registry"
+        return 1
+    fi
+}
+
 unregister_ralph_global_instance() {
     [[ "${RALPH_GLOBAL_DISABLE:-0}" == "1" ]] && return 0
     local link_path="$(get_ralph_global_dir)/instances/$(get_ralph_global_link_name)"
     if [[ -L "$link_path" || -e "$link_path" ]]; then
-        rm -f "$link_path" 2>/dev/null && log "Unregistered from global registry" || true
+        # Use rm -rf for Windows compatibility (ln -s may create directories)
+        rm -rf "$link_path" 2>/dev/null && log "Unregistered from global registry" || true
     fi
 }
 

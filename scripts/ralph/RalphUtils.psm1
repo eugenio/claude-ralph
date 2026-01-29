@@ -18,6 +18,7 @@
 
 # Script-level variables for paths
 $script:RalphRoot = $PSScriptRoot
+$script:ResolvedPaths = $null
 
 <#
 .SYNOPSIS
@@ -25,42 +26,123 @@ $script:RalphRoot = $PSScriptRoot
 
 .DESCRIPTION
     Returns a hashtable containing all relevant paths for ralph operations.
-    Uses $PSScriptRoot for reliable path resolution regardless of current working directory.
+    Supports external prd.json files for global usage.
+
+.PARAMETER PrdFile
+    Optional path to prd.json file. If specified, instance/lock paths are relative to its location.
+
+.PARAMETER ProjectRoot
+    Optional project root directory for git operations. Defaults to prd.json directory if PrdFile specified.
 
 .OUTPUTS
     System.Collections.Hashtable
     A hashtable with the following keys:
     - RalphDir: The ralph scripts directory
-    - ProjectRoot: The project root (two levels up from ralph)
+    - ProjectRoot: The project root for git operations
     - PrdFile: Path to prd.json
+    - PrdDir: Directory containing prd.json
     - ProgressFile: Path to progress.txt
     - PromptFile: Path to prompt.md
     - LogFile: Path to ralph.log
     - ArchiveDir: Path to archive directory
     - LastBranchFile: Path to .last-branch file
+    - InstancesDir: Path to instances directory
+    - LocksDir: Path to locks directory
 
 .EXAMPLE
     $paths = Get-RalphPaths
     Write-Host "PRD file is at: $($paths.PrdFile)"
+
+.EXAMPLE
+    $paths = Get-RalphPaths -PrdFile '/project/docs/prd.json' -ProjectRoot '/project'
+    Write-Host "Using external PRD at: $($paths.PrdFile)"
 #>
 function Get-RalphPaths {
     [CmdletBinding()]
     [OutputType([hashtable])]
-    param()
+    param(
+        [Parameter()]
+        [string]$PrdFile,
+
+        [Parameter()]
+        [string]$ProjectRoot
+    )
+
+    # Return cached paths if available and no new parameters specified
+    if (-not $PrdFile -and -not $ProjectRoot -and $script:ResolvedPaths) {
+        return $script:ResolvedPaths
+    }
 
     $ralphDir = $script:RalphRoot
-    $projectRoot = Split-Path -Path (Split-Path -Path $ralphDir -Parent) -Parent
 
-    return @{
-        RalphDir       = $ralphDir
-        ProjectRoot    = $projectRoot
-        PrdFile        = Join-Path $ralphDir 'prd.json'
-        ProgressFile   = Join-Path $ralphDir 'progress.txt'
-        PromptFile     = Join-Path $ralphDir 'prompt.md'
-        LogFile        = Join-Path $ralphDir 'ralph.log'
-        ArchiveDir     = Join-Path $ralphDir 'archive'
-        LastBranchFile = Join-Path $ralphDir '.last-branch'
+    # Determine PRD file and its directory
+    if ($PrdFile -and (Test-Path $PrdFile)) {
+        $prdFilePath = Resolve-Path -Path $PrdFile | Select-Object -ExpandProperty Path
+        $prdDir = Split-Path -Path $prdFilePath -Parent
     }
+    elseif ($PrdFile) {
+        # Path specified but doesn't exist - use it anyway (may be created later)
+        $prdFilePath = $PrdFile
+        $prdDir = Split-Path -Path $PrdFile -Parent
+        if (-not $prdDir) { $prdDir = $ralphDir }
+    }
+    else {
+        $prdFilePath = Join-Path $ralphDir 'prd.json'
+        $prdDir = $ralphDir
+    }
+
+    # Determine project root
+    if ($ProjectRoot -and (Test-Path $ProjectRoot)) {
+        $projectRootPath = Resolve-Path -Path $ProjectRoot | Select-Object -ExpandProperty Path
+    }
+    elseif ($ProjectRoot) {
+        $projectRootPath = $ProjectRoot
+    }
+    elseif ($env:RALPH_PROJECT_ROOT) {
+        $projectRootPath = $env:RALPH_PROJECT_ROOT
+    }
+    elseif ($PrdFile) {
+        # Default to prd.json directory when -PrdFile is specified
+        $projectRootPath = $prdDir
+    }
+    else {
+        $projectRootPath = Split-Path -Path (Split-Path -Path $ralphDir -Parent) -Parent
+    }
+
+    $paths = @{
+        RalphDir       = $ralphDir
+        ProjectRoot    = $projectRootPath
+        PrdFile        = $prdFilePath
+        PrdDir         = $prdDir
+        ProgressFile   = Join-Path $prdDir 'progress.txt'
+        PromptFile     = Join-Path $ralphDir 'prompt.md'
+        LogFile        = Join-Path $prdDir 'ralph.log'
+        ArchiveDir     = Join-Path $prdDir 'archive'
+        LastBranchFile = Join-Path $prdDir '.last-branch'
+        InstancesDir   = Join-Path $prdDir 'instances'
+        LocksDir       = Join-Path $prdDir 'locks'
+    }
+
+    # Store resolved paths for subsequent calls without parameters
+    if ($PrdFile -or $ProjectRoot) {
+        $script:ResolvedPaths = $paths
+    }
+
+    return $paths
+}
+
+<#
+.SYNOPSIS
+    Clears cached resolved paths.
+
+.DESCRIPTION
+    Resets the module's cached paths, forcing the next Get-RalphPaths call
+    to recalculate paths. Useful for testing.
+#>
+function Reset-RalphPaths {
+    [CmdletBinding()]
+    param()
+    $script:ResolvedPaths = $null
 }
 
 <#
@@ -1440,22 +1522,22 @@ function Request-RalphStoryClaim {
 
 <#
 .SYNOPSIS
-    Releases a story claim.
+    Removes a story claim.
 
 .DESCRIPTION
-    Releases lock and clears claimedBy in PRD.
+    Removes lock and clears claimedBy in PRD.
 
 .PARAMETER StoryId
     The story ID to release.
 
 .OUTPUTS
     System.Boolean
-    Returns $true if release succeeded.
+    Returns $true if removal succeeded.
 
 .EXAMPLE
-    Release-RalphStoryClaim -StoryId 'US-001'
+    Remove-RalphStoryClaim -StoryId 'US-001'
 #>
-function Release-RalphStoryClaim {
+function Remove-RalphStoryClaim {
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -1828,7 +1910,7 @@ function Invoke-RalphCleanup {
         Write-Warning "Failed to release locks: $_"
     }
 
-    # Unregister from global registry (GM-003)
+    # Unregister from global registry (PS-004)
     try {
         $null = Unregister-RalphGlobalInstance
     }
@@ -1929,83 +2011,167 @@ function Initialize-RalphGlobalRegistry {
     }
 }
 
-# =============================================================================
-# GLOBAL INSTANCE REGISTRATION (GM-003)
-# =============================================================================
+<#
+.SYNOPSIS
+    Gets the link name for global registry registration.
 
+.DESCRIPTION
+    Returns the link name in format: {project-name}-{instance-id}
+    This is used to create symlinks/junctions in the global registry.
+
+.OUTPUTS
+    System.String
+    The link name for the global registry.
+
+.EXAMPLE
+    $linkName = Get-RalphGlobalLinkName
+    Write-Host "Link name: $linkName"
+#>
 function Get-RalphGlobalLinkName {
     [CmdletBinding()]
     [OutputType([string])]
     param()
+
     $paths = Get-RalphPaths
     $projectName = Split-Path -Path $paths.ProjectRoot -Leaf
     $instanceId = Get-RalphInstanceId
+
     return "$projectName-$instanceId"
 }
 
+<#
+.SYNOPSIS
+    Registers this instance in the global registry.
+
+.DESCRIPTION
+    Creates a symbolic link (Unix) or directory junction (Windows) in the global
+    registry pointing to the local instance directory. This allows the global
+    dashboard to discover instances across different projects.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if registration succeeded, $false otherwise.
+
+.EXAMPLE
+    if (Register-RalphGlobalInstance) {
+        Write-Host "Registered in global registry"
+    }
+#>
 function Register-RalphGlobalInstance {
     [CmdletBinding()]
     [OutputType([bool])]
-    param([Parameter()][hashtable]$InstancePaths)
-    if ($env:RALPH_GLOBAL_DISABLE -eq '1') { return $true }
-    if (-not (Initialize-RalphGlobalRegistry)) { return $false }
-    $gDir = Get-RalphGlobalDir
-    $iDir = Join-Path $gDir 'instances'
-    $lName = Get-RalphGlobalLinkName
-    if (-not $InstancePaths) {
-        $iId = Get-RalphInstanceId
-        $p = Get-RalphPaths
-        $instDir = Join-Path (Join-Path $p.RalphDir 'instances') $iId
-        $sFile = Join-Path $instDir 'status.json'
-    } else {
-        $instDir = $InstancePaths.InstanceDir
-        $sFile = $InstancePaths.StatusFile
-    }
-    $lPath = Join-Path $iDir $lName
-    try {
-        if (Test-Path $lPath) { Remove-Item $lPath -Force -Recurse -EA SilentlyContinue }
-        if ($IsWindows -or $env:OS -eq 'Windows_NT') {
-            $null = New-Item -Path $lPath -ItemType Junction -Target $instDir -EA Stop
-        } else {
-            $null = New-Item -Path $lPath -ItemType SymbolicLink -Target $instDir -EA Stop
-        }
-        Add-RalphInstanceLog "Registered in global registry: $lPath"
-        return $true
-    } catch {
-        Write-Warning "Junction/symlink failed: $_. Using fallback."
-        try {
-            if (-not (Test-Path $lPath)) { New-Item $lPath -ItemType Directory -Force | Out-Null }
-            if (Test-Path $sFile) { Copy-Item $sFile (Join-Path $lPath 'status.json') -Force }
-            Add-RalphInstanceLog "Registered in global (fallback): $lPath"
-            return $true
-        } catch { Write-Warning "Fallback failed: $_"; return $false }
-    }
-}
-
-function Unregister-RalphGlobalInstance {
-    [CmdletBinding()]
-    [OutputType([bool])]
     param()
-    if ($env:RALPH_GLOBAL_DISABLE -eq '1') { return $true }
-    $gDir = Get-RalphGlobalDir
-    $iDir = Join-Path $gDir 'instances'
-    $lName = Get-RalphGlobalLinkName
-    $lPath = Join-Path $iDir $lName
-    try {
-        if (Test-Path $lPath) {
-            Remove-Item -Path $lPath -Force -Recurse -ErrorAction Stop
-            Add-RalphInstanceLog "Unregistered from global registry"
-        }
+
+    # Skip if disabled
+    if ($env:RALPH_GLOBAL_DISABLE -eq '1') {
         return $true
-    } catch {
-        Write-Warning "Failed to unregister: $_"
+    }
+
+    $globalDir = Get-RalphGlobalDir
+    $instancesDir = Join-Path $globalDir 'instances'
+    $linkName = Get-RalphGlobalLinkName
+    $linkPath = Join-Path $instancesDir $linkName
+
+    # Ensure global registry is initialized
+    if (-not (Initialize-RalphGlobalRegistry)) {
+        return $false
+    }
+
+    # Get the local instance directory
+    $instanceId = Get-RalphInstanceId
+    $paths = Get-RalphPaths
+    $instanceDir = Join-Path (Join-Path $paths.RalphDir 'instances') $instanceId
+
+    # Create instance directory if it doesn't exist
+    if (-not (Test-Path $instanceDir)) {
+        try {
+            New-Item -Path $instanceDir -ItemType Directory -Force | Out-Null
+        }
+        catch {
+            Write-Warning "Failed to create instance directory: $_"
+            return $false
+        }
+    }
+
+    # Remove existing link if present (in case of stale link)
+    if (Test-Path $linkPath) {
+        try {
+            Remove-Item -Path $linkPath -Force -Recurse -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Failed to remove existing link: $_"
+        }
+    }
+
+    # Create link (junction on Windows, symlink on Unix)
+    try {
+        if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            # Use directory junction on Windows (doesn't require admin)
+            New-Item -ItemType Junction -Path $linkPath -Target $instanceDir -Force | Out-Null
+        }
+        else {
+            # Use symbolic link on Unix
+            New-Item -ItemType SymbolicLink -Path $linkPath -Target $instanceDir -Force | Out-Null
+        }
+        Add-RalphInstanceLog "Registered in global registry: $linkName"
+        return $true
+    }
+    catch {
+        # Log but don't fail - global registry is optional
+        Add-RalphInstanceLog "Warning: Failed to register in global registry: $_"
         return $false
     }
 }
 
+<#
+.SYNOPSIS
+    Unregisters this instance from the global registry.
+
+.DESCRIPTION
+    Removes the symbolic link or directory junction from the global registry
+    that points to this instance. Called during cleanup/shutdown.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if unregistration succeeded or link didn't exist.
+
+.EXAMPLE
+    Unregister-RalphGlobalInstance
+#>
+function Unregister-RalphGlobalInstance {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    # Skip if disabled
+    if ($env:RALPH_GLOBAL_DISABLE -eq '1') {
+        return $true
+    }
+
+    $globalDir = Get-RalphGlobalDir
+    $linkName = Get-RalphGlobalLinkName
+    $linkPath = Join-Path (Join-Path $globalDir 'instances') $linkName
+
+    if (Test-Path $linkPath) {
+        try {
+            Remove-Item -Path $linkPath -Force -Recurse -ErrorAction Stop
+            Add-RalphInstanceLog "Unregistered from global registry"
+            return $true
+        }
+        catch {
+            Write-Warning "Failed to unregister from global registry: $_"
+            return $false
+        }
+    }
+
+    return $true
+}
+
+
 # Export all public functions
 Export-ModuleMember -Function @(
     'Get-RalphPaths'
+    'Reset-RalphPaths'
     'Test-Dependencies'
     'Read-PrdJson'
     'Write-PrdJson'
@@ -2035,7 +2201,7 @@ Export-ModuleMember -Function @(
     # Story claiming functions (PS-004)
     'Get-RalphNextStory'
     'Request-RalphStoryClaim'
-    'Release-RalphStoryClaim'
+    'Remove-RalphStoryClaim'
     'Request-RalphNextStoryClaim'
     # Git branch functions (PS-005)
     'New-RalphStoryBranch'
@@ -2046,10 +2212,9 @@ Export-ModuleMember -Function @(
     'Register-RalphCleanup'
     'Invoke-RalphCleanup'
     'Set-RalphCurrentStory'
-    # Global registry functions (GM-001)
+    # Global registry functions (GM-001, PS-004)
     'Get-RalphGlobalDir'
     'Initialize-RalphGlobalRegistry'
-    # Global instance registration (GM-003)
     'Get-RalphGlobalLinkName'
     'Register-RalphGlobalInstance'
     'Unregister-RalphGlobalInstance'

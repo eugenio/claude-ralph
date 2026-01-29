@@ -90,16 +90,26 @@ your-project/
 │       ├── ralph.ps1            # Main loop script (PowerShell)
 │       ├── ralph-once.sh        # Single iteration script (Bash)
 │       ├── ralph-once.ps1       # Single iteration script (PowerShell)
+│       ├── ralph-parallel.sh    # Parallel launcher (Bash)
+│       ├── ralph-parallel.ps1   # Parallel launcher (PowerShell)
 │       ├── ralph-status.sh      # Status checker (Bash)
 │       ├── ralph-status.ps1     # Status checker (PowerShell)
+│       ├── ralph-dashboard.sh   # TUI dashboard (Bash)
+│       ├── ralph-dashboard.ps1  # TUI dashboard (PowerShell)
+│       ├── ralph-cleanup.sh     # Instance cleanup (Bash)
+│       ├── ralph-cleanup.ps1    # Instance cleanup (PowerShell)
+│       ├── ralph-locks.sh       # Lock management (Bash)
+│       ├── ralph-locks.ps1      # Lock management (PowerShell)
 │       ├── install-skills.sh    # Skill installer (Bash)
 │       ├── install-skills.ps1   # Skill installer (PowerShell)
+│       ├── ralph-utils.sh       # Shared Bash utilities
 │       ├── RalphUtils.psm1      # Shared PowerShell module
 │       ├── prompt.md            # Instructions for each iteration
 │       ├── prd.json             # User stories with passes status
 │       ├── progress.txt         # Append-only learnings log
-│       ├── ralph.log            # Execution log
 │       ├── .last-branch         # Current branch tracker
+│       ├── instances/           # Instance directories (auto-created)
+│       ├── locks/               # Story lock files (auto-created)
 │       ├── archive/             # Previous runs
 │       ├── skills/              # Claude Code skills
 │       └── tests/               # Pester test suites
@@ -108,6 +118,18 @@ your-project/
     ├── src/                      # Source code (created by Ralph)
     ├── package.json              # Dependencies (created by Ralph)
     └── ...                       # Other project files
+```
+
+### Global Registry
+
+Ralph can register instances in a global registry for cross-project monitoring:
+
+```
+~/.ralph/global/                   # Global registry directory
+├── instances/                     # Symlinks to active instances
+│   ├── projectA-user-host-123-*  # Symlink to project A instance
+│   └── projectB-user-host-456-*  # Symlink to project B instance
+└── locks/                         # Global lock files (reserved)
 ```
 
 ## How It Works
@@ -154,16 +176,19 @@ Run these from your project root:
 ### Bash Commands
 
 ```bash
-# Run Ralph loop
+# Run Ralph loop (10 iterations max)
 ./scripts/ralph/ralph.sh 10
 
-# Run single iteration
+# Run single iteration (no loop, no archive)
 ./scripts/ralph/ralph-once.sh
 
 # Check status
 ./scripts/ralph/ralph-status.sh
 # Or manually
 cat scripts/ralph/prd.json | jq '.userStories[] | {id, title, passes}'
+
+# Parallel execution (see below)
+./scripts/ralph/ralph-parallel.sh start -c 3 -m 10
 
 # See learnings
 cat scripts/ralph/progress.txt
@@ -178,10 +203,10 @@ git log --oneline -10
 ### PowerShell Commands
 
 ```powershell
-# Run Ralph loop
+# Run Ralph loop (10 iterations max)
 pwsh ./scripts/ralph/ralph.ps1 -MaxIterations 10
 
-# Run single iteration
+# Run single iteration (no loop, no archive)
 pwsh ./scripts/ralph/ralph-once.ps1
 
 # Check status
@@ -191,6 +216,9 @@ Get-Content ./scripts/ralph/prd.json | ConvertFrom-Json |
     Select-Object -ExpandProperty userStories |
     Select-Object id, title, passes
 
+# Parallel execution (see below)
+pwsh ./scripts/ralph/ralph-parallel.ps1 Start -Count 3 -MaxIterations 10
+
 # See learnings
 Get-Content ./scripts/ralph/progress.txt
 
@@ -199,6 +227,76 @@ Get-Content ./scripts/ralph/ralph.log
 
 # Check git history
 git log --oneline -10
+```
+
+## Parallel Execution
+
+Ralph supports running multiple instances in parallel to speed up PRD completion. Each instance works on different stories using file-based locking.
+
+### Bash (ralph-parallel.sh)
+
+```bash
+# Start 3 parallel instances, each with max 10 iterations
+./scripts/ralph/ralph-parallel.sh start -c 3 -m 10
+
+# Check status of running instances
+./scripts/ralph/ralph-parallel.sh status
+
+# Stop all instances gracefully (SIGTERM)
+./scripts/ralph/ralph-parallel.sh stop
+
+# Force kill all instances (SIGKILL)
+./scripts/ralph/ralph-parallel.sh kill
+
+# Open monitoring dashboard
+./scripts/ralph/ralph-parallel.sh dashboard
+```
+
+**Options:**
+- `-c COUNT` or `--count COUNT` - Number of instances (default: CPU cores / 2)
+- `-m ITERATIONS` or `--max-iterations ITERATIONS` - Max iterations per instance (default: 10)
+
+### PowerShell (ralph-parallel.ps1)
+
+```powershell
+# Start 3 parallel instances, each with max 10 iterations
+pwsh ./scripts/ralph/ralph-parallel.ps1 Start -Count 3 -MaxIterations 10
+
+# Check status of running instances
+pwsh ./scripts/ralph/ralph-parallel.ps1 Status
+
+# Stop all instances gracefully
+pwsh ./scripts/ralph/ralph-parallel.ps1 Stop
+
+# Force kill all instances
+pwsh ./scripts/ralph/ralph-parallel.ps1 Kill
+
+# Open monitoring dashboard
+pwsh ./scripts/ralph/ralph-parallel.ps1 Dashboard
+```
+
+### Environment Variables
+
+Control parallel execution behavior:
+
+```bash
+# Maximum allowed instances (default: 8)
+export RALPH_MAX_INSTANCES=4
+
+# Disable global registry for this instance
+export RALPH_GLOBAL_DISABLE=1
+
+# Custom global registry directory (default: ~/.ralph/global)
+export RALPH_GLOBAL_DIR=/custom/path
+
+# Cleanup TTL in days (default: 7)
+export RALPH_CLEANUP_TTL=14
+
+# Lock timeout in seconds (default: 7200 = 2 hours)
+export RALPH_LOCK_TIMEOUT=3600
+
+# Enable debug logging
+export RALPH_DEBUG=1
 ```
 
 ## Skills
