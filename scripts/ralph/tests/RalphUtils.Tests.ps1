@@ -449,6 +449,110 @@ Describe 'Add-LogEntry' {
     }
 }
 
+# =============================================================================
+# GLOBAL REGISTRY TESTS (GM-001)
+# =============================================================================
+
+Describe 'Get-RalphGlobalDir' {
+    Context 'With default settings' {
+        It 'Returns a path ending with .ralph/global' {
+            $result = Get-RalphGlobalDir
+            $result | Should -Match '\.ralph[/\\]global$'
+        }
+
+        It 'Returns path under user home directory' {
+            $result = Get-RalphGlobalDir
+            $userHome = if ($IsWindows -or $env:OS -eq 'Windows_NT') { $env:USERPROFILE } else { $env:HOME }
+            $escapedHome = [regex]::Escape($userHome)
+            $result | Should -Match $escapedHome
+        }
+    }
+
+    Context 'With RALPH_GLOBAL_DIR override' {
+        BeforeAll {
+            $script:originalGlobalDir = $env:RALPH_GLOBAL_DIR
+            $env:RALPH_GLOBAL_DIR = '/custom/global/path'
+        }
+
+        AfterAll {
+            $env:RALPH_GLOBAL_DIR = $script:originalGlobalDir
+        }
+
+        It 'Returns the override path' {
+            $result = Get-RalphGlobalDir
+            $result | Should -Be '/custom/global/path'
+        }
+    }
+}
+
+Describe 'Initialize-RalphGlobalRegistry' {
+    BeforeAll {
+        $script:testGlobalDir = Join-Path $TestDrive 'ralph-global-test'
+        $script:originalGlobalDir = $env:RALPH_GLOBAL_DIR
+        $env:RALPH_GLOBAL_DIR = $script:testGlobalDir
+    }
+
+    AfterAll {
+        $env:RALPH_GLOBAL_DIR = $script:originalGlobalDir
+    }
+
+    BeforeEach {
+        if (Test-Path $script:testGlobalDir) {
+            Remove-Item -Path $script:testGlobalDir -Recurse -Force
+        }
+    }
+
+    Context 'When creating new directories' {
+        It 'Creates instances directory' {
+            Initialize-RalphGlobalRegistry | Should -BeTrue
+            $instancesDir = Join-Path $script:testGlobalDir 'instances'
+            Test-Path $instancesDir | Should -BeTrue
+        }
+
+        It 'Creates locks directory' {
+            Initialize-RalphGlobalRegistry | Should -BeTrue
+            $locksDir = Join-Path $script:testGlobalDir 'locks'
+            Test-Path $locksDir | Should -BeTrue
+        }
+    }
+
+    Context 'When directories already exist' {
+        BeforeEach {
+            $instancesDir = Join-Path $script:testGlobalDir 'instances'
+            $locksDir = Join-Path $script:testGlobalDir 'locks'
+            New-Item -Path $instancesDir -ItemType Directory -Force | Out-Null
+            New-Item -Path $locksDir -ItemType Directory -Force | Out-Null
+        }
+
+        It 'Returns true without error' {
+            Initialize-RalphGlobalRegistry | Should -BeTrue
+        }
+    }
+
+    Context 'When RALPH_GLOBAL_DISABLE is set' {
+        BeforeAll {
+            $script:originalDisable = $env:RALPH_GLOBAL_DISABLE
+            $env:RALPH_GLOBAL_DISABLE = '1'
+        }
+
+        AfterAll {
+            $env:RALPH_GLOBAL_DISABLE = $script:originalDisable
+        }
+
+        It 'Returns true immediately' {
+            Initialize-RalphGlobalRegistry | Should -BeTrue
+        }
+
+        It 'Does not create directories' {
+            if (Test-Path $script:testGlobalDir) {
+                Remove-Item -Path $script:testGlobalDir -Recurse -Force
+            }
+            Initialize-RalphGlobalRegistry | Out-Null
+            Test-Path $script:testGlobalDir | Should -BeFalse
+        }
+    }
+}
+
 AfterAll {
     # Clean up - remove the imported module
     Remove-Module RalphUtils -ErrorAction SilentlyContinue

@@ -21,6 +21,12 @@ LAST_BRANCH_FILE="$SCRIPT_DIR/.last-branch"
 INSTANCES_DIR="$SCRIPT_DIR/instances"
 LOCKS_DIR="$SCRIPT_DIR/locks"
 
+# Global registry directory (GM-001)
+# Override with RALPH_GLOBAL_DIR environment variable
+GLOBAL_DIR="${RALPH_GLOBAL_DIR:-$HOME/.ralph/global}"
+GLOBAL_INSTANCES_DIR="$GLOBAL_DIR/instances"
+GLOBAL_LOCKS_DIR="$GLOBAL_DIR/locks"
+
 # Generate unique instance ID: user-hostname-pid-timestamp
 INSTANCE_ID="${USER:-unknown}-$(hostname -s 2>/dev/null || echo 'local')-$$-$(date +%s)"
 INSTANCE_SHORT_ID="${INSTANCE_ID:0:8}"
@@ -61,6 +67,40 @@ log_debug() {
 }
 
 # =============================================================================
+# GLOBAL REGISTRY (GM-001)
+# =============================================================================
+
+init_global_registry() {
+    # Skip if disabled
+    if [ "${RALPH_GLOBAL_DISABLE:-}" = "1" ]; then
+        log_debug "Global registry disabled"
+        return 0
+    fi
+
+    # Create global registry directories
+    if [ ! -d "$GLOBAL_INSTANCES_DIR" ]; then
+        if mkdir -p "$GLOBAL_INSTANCES_DIR" 2>/dev/null; then
+            chmod 700 "$GLOBAL_DIR" 2>/dev/null || true
+            chmod 700 "$GLOBAL_INSTANCES_DIR" 2>/dev/null || true
+            log "Created global instances directory: $GLOBAL_INSTANCES_DIR"
+        else
+            log "Warning: Failed to create global instances directory"
+        fi
+    fi
+
+    if [ ! -d "$GLOBAL_LOCKS_DIR" ]; then
+        if mkdir -p "$GLOBAL_LOCKS_DIR" 2>/dev/null; then
+            chmod 700 "$GLOBAL_LOCKS_DIR" 2>/dev/null || true
+            log "Created global locks directory: $GLOBAL_LOCKS_DIR"
+        else
+            log "Warning: Failed to create global locks directory"
+        fi
+    fi
+
+    return 0
+}
+
+# =============================================================================
 # INSTANCE MANAGEMENT (US-001, US-002)
 # =============================================================================
 
@@ -69,6 +109,9 @@ init_instance() {
     mkdir -p "$INSTANCE_DIR"
     mkdir -p "$INSTANCES_DIR"
     mkdir -p "$LOCKS_DIR"
+
+    # Initialize global registry (GM-001)
+    init_global_registry
 
     # Initialize log file
     echo "# Ralph Instance Log" > "$LOG_FILE"

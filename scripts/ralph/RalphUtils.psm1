@@ -1874,6 +1874,54 @@ function Set-RalphCurrentStory {
     $script:CurrentStoryId = $StoryId
 }
 
+# =============================================================================
+# GLOBAL REGISTRY FUNCTIONS (GM-001)
+# =============================================================================
+
+function Get-RalphGlobalDir {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+    if ($env:RALPH_GLOBAL_DIR) { return $env:RALPH_GLOBAL_DIR }
+    $h = if ($IsWindows -or $env:OS -eq 'Windows_NT') { $env:USERPROFILE } else { $env:HOME }
+    return Join-Path $h '.ralph' 'global'
+}
+
+function Initialize-RalphGlobalRegistry {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+    if ($env:RALPH_GLOBAL_DISABLE -eq '1') { return $true }
+    $globalDir = Get-RalphGlobalDir
+    $instancesDir = Join-Path $globalDir 'instances'
+    $locksDir = Join-Path $globalDir 'locks'
+    try {
+        if (-not (Test-Path $instancesDir)) {
+            New-Item -Path $instancesDir -ItemType Directory -Force | Out-Null
+            if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
+                if (Get-Command chmod -ErrorAction SilentlyContinue) {
+                    chmod 700 $globalDir 2>$null
+                    chmod 700 $instancesDir 2>$null
+                }
+            }
+        }
+        if (-not (Test-Path $locksDir)) {
+            New-Item -Path $locksDir -ItemType Directory -Force | Out-Null
+            if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
+                if (Get-Command chmod -ErrorAction SilentlyContinue) {
+                    chmod 700 $locksDir 2>$null
+                }
+            }
+        }
+        return $true
+    }
+    catch {
+        Write-Warning "Failed to initialize global registry: $_"
+        return $false
+    }
+}
+
+
 # Export all public functions
 Export-ModuleMember -Function @(
     'Get-RalphPaths'
@@ -1917,4 +1965,7 @@ Export-ModuleMember -Function @(
     'Register-RalphCleanup'
     'Invoke-RalphCleanup'
     'Set-RalphCurrentStory'
+    # Global registry functions (GM-001)
+    'Get-RalphGlobalDir'
+    'Initialize-RalphGlobalRegistry'
 )

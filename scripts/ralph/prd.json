@@ -1,108 +1,192 @@
 {
-  "featureName": "Optional Alias Installation for Ralph Tools",
-  "branchName": "ralph/install-aliases",
-  "description": "Extend install-skills scripts to optionally install shell aliases for ralph tools, allowing users to run ralph, ralph-once, and ralph-status from any directory",
+  "featureName": "Global Cross-Project Ralph Monitoring Infrastructure",
+  "branchName": "ralph/global-monitoring",
+  "description": "Enable ralph-dashboard to monitor Ralph instances across multiple projects from a central registry at ~/.ralph/global/ (Linux/macOS) or $env:USERPROFILE\\.ralph\\global\\ (Windows). Full cross-platform support for both Bash and PowerShell implementations.",
   "userStories": [
     {
-      "id": "US-001",
-      "title": "Prompt User for Alias Installation (Bash)",
+      "id": "GM-001",
+      "title": "Global Registry Directory Structure",
       "priority": 1,
       "acceptanceCriteria": [
-        "After installing skills, script prompts 'Would you like to install shell aliases for ralph tools? (y/N)'",
-        "Default is No (pressing Enter skips alias installation)",
-        "If user enters 'y' or 'Y', proceed to alias installation",
-        "If user enters anything else, skip alias installation gracefully",
-        "Script runs without errors (shellcheck passes)"
+        "~/.ralph/global/instances/ directory is created on first Ralph run (Bash)",
+        "$env:USERPROFILE\\.ralph\\global\\instances\\ directory is created on first Ralph run (PowerShell)",
+        "~/.ralph/global/locks/ directory is created for future global lock support",
+        "Directory structure is created with appropriate permissions (700 on Unix)",
+        "Existing local functionality continues to work unchanged",
+        "Both ralph.sh and ralph.ps1 create the same directory structure",
+        "Tests pass: directory creation works on both platforms"
       ],
       "passes": true,
-      "notes": "Use read -p for prompting. Keep prompt logic simple and clear."
+      "notes": "Foundation story - creates the global registry directories. Add RALPH_GLOBAL_DIR env var override support.",
+      "claimedBy": null
     },
     {
-      "id": "US-002",
-      "title": "Install Bash/Zsh Aliases",
+      "id": "GM-002",
+      "title": "Global Instance Registration (Bash)",
       "priority": 2,
       "acceptanceCriteria": [
-        "Detect which shell config files exist (.bashrc, .zshrc, .profile)",
-        "Add aliases to all detected config files",
-        "Aliases use absolute paths to the ralph scripts in scripts/ralph/",
-        "Aliases added: ralph, ralph-once, ralph-status",
-        "Skip adding if alias already exists in file (avoid duplicates)",
-        "Add a comment marker '# Ralph aliases' before the alias block",
-        "Print which files were modified",
-        "Script runs without errors (shellcheck passes)"
+        "ralph.sh creates a symlink in ~/.ralph/global/instances/ pointing to the local instance directory",
+        "Symlink name follows format: {project-name}-{instance-id} for uniqueness",
+        "Symlink is created atomically using ln -sfn",
+        "Registration happens in init_instance() function",
+        "Local instance directory still exists and functions normally",
+        "RALPH_GLOBAL_DISABLE=1 skips global registration",
+        "Tests pass: symlink created and resolves correctly"
       ],
-      "passes": true,
-      "notes": "Use grep to check for existing aliases. Store absolute path at script execution time using $(cd ... && pwd)"
+      "passes": false,
+      "notes": "Bash implementation of global registration. Uses basename of PROJECT_ROOT for project-name.",
+      "claimedBy": null
     },
     {
-      "id": "US-003",
-      "title": "Prompt User for Alias Installation (PowerShell)",
+      "id": "GM-003",
+      "title": "Global Instance Registration (PowerShell)",
       "priority": 3,
       "acceptanceCriteria": [
-        "After installing skills, script prompts for alias installation",
-        "Use Read-Host with clear prompt text",
-        "Default is No (empty input skips alias installation)",
-        "If user enters 'y' or 'Y', proceed to alias installation",
-        "If user enters anything else, skip alias installation gracefully",
-        "Script passes PSScriptAnalyzer checks"
+        "ralph.ps1 creates a junction in $env:USERPROFILE\\.ralph\\global\\instances\\",
+        "Uses New-Item -ItemType Junction for directory links (works without admin on Windows)",
+        "Junction name follows same format: {project-name}-{instance-id}",
+        "Registration happens in Initialize-Instance or equivalent function",
+        "Fallback to copying status.json if junction creation fails",
+        "$env:RALPH_GLOBAL_DISABLE=1 skips global registration",
+        "Tests pass: junction created and resolves correctly"
       ],
-      "passes": true,
-      "notes": "Keep prompt logic simple. Match the bash script behavior."
+      "passes": false,
+      "notes": "PowerShell implementation of global registration. Junction points work on NTFS without admin.",
+      "claimedBy": null
     },
     {
-      "id": "US-004",
-      "title": "Install PowerShell Aliases",
+      "id": "GM-004",
+      "title": "Global Instance Deregistration",
       "priority": 4,
       "acceptanceCriteria": [
-        "Create PowerShell profile if it doesn't exist ($PROFILE path)",
-        "Add PowerShell functions (not aliases, since aliases can't take arguments well)",
-        "Functions use absolute paths to the .ps1 scripts",
-        "Functions: ralph, ralph-once, ralph-status that call pwsh with the scripts",
-        "Skip adding if function already exists in profile (avoid duplicates)",
-        "Add a comment marker '# Ralph functions' before the function block",
-        "Print the profile path that was modified",
-        "Script passes PSScriptAnalyzer checks"
+        "ralph.sh removes the global symlink in cleanup_on_exit()",
+        "ralph.ps1 removes the global junction in cleanup handler",
+        "Removal is idempotent (no error if already removed)",
+        "Local instance cleanup still functions normally",
+        "Deregistration logs the action",
+        "Tests pass: cleanup removes global entries"
       ],
       "passes": true,
-      "notes": "Use $PROFILE automatic variable. Create parent directories with New-Item -Force if needed."
+      "notes": "Both Bash and PowerShell implementations for cleanup on exit.",
+      "claimedBy": "uge-uge-X670E-AORUS-XTREME-584981-1769642051"
     },
     {
-      "id": "US-005",
-      "title": "Show Post-Installation Instructions",
+      "id": "GM-005",
+      "title": "Dashboard Global View Mode (Bash)",
       "priority": 5,
       "acceptanceCriteria": [
-        "After alias installation, show which aliases were installed",
-        "Show command to reload shell config (e.g., source ~/.bashrc or restart PowerShell)",
-        "Show example usage: ralph, ralph-once, ralph-status",
-        "Mention that aliases use absolute paths and work from any directory"
+        "--all flag sets INSTANCES_DIR to ~/.ralph/global/instances/",
+        "Dashboard resolves symlinks to read actual status.json files",
+        "Instance display includes project name extracted from symlink name",
+        "Header shows GLOBAL VIEW indicator when in global mode",
+        "PRD progress bar is hidden in global mode (no single PRD)",
+        "Tests pass: dashboard shows instances from multiple projects"
       ],
-      "passes": true,
-      "notes": "Show instructions in both bash and PowerShell scripts after alias installation completes."
+      "passes": false,
+      "notes": "Update ralph-dashboard.sh to support --all flag for global view.",
+      "claimedBy": null
     },
     {
-      "id": "US-006",
-      "title": "Add Pester Tests for PowerShell Alias Installation",
+      "id": "GM-006",
+      "title": "Dashboard Global View Mode (PowerShell)",
       "priority": 6,
       "acceptanceCriteria": [
-        "Add tests to install-skills.Tests.ps1",
-        "Test prompt handling (y/n responses)",
-        "Test profile detection and creation",
-        "Test duplicate detection (don't add if exists)",
-        "Test function content is correct",
-        "All tests pass with Invoke-Pester"
+        "-All switch sets instances path to global directory",
+        "Dashboard resolves junctions to read actual status.json files",
+        "Instance display includes project name extracted from junction name",
+        "Header shows GLOBAL VIEW indicator when in global mode",
+        "PRD progress bar is hidden in global mode",
+        "Uses Get-Item to resolve junction targets",
+        "Tests pass: dashboard shows instances from multiple projects"
       ],
-      "passes": true,
-      "notes": "Tests added - require Pester 5.x to run. Use mock functions for Read-Host and file operations."
+      "passes": false,
+      "notes": "Update ralph-dashboard.ps1 to support -All switch for global view.",
+      "claimedBy": null
+    },
+    {
+      "id": "GM-007",
+      "title": "Dashboard Repository Filter",
+      "priority": 7,
+      "acceptanceCriteria": [
+        "--repo PATH (Bash) and -Repo PATH (PowerShell) filter instances by projectRoot",
+        "Filter works with both absolute and relative paths",
+        "Filter works in both local and global modes",
+        "Partial path matching is supported (e.g., --repo mojo-ode matches /home/user/mojo-ode)",
+        "Message shown if no instances match the filter",
+        "Tests pass: filter correctly limits displayed instances"
+      ],
+      "passes": false,
+      "notes": "Implement --repo/-Repo filter in both dashboard implementations.",
+      "claimedBy": null
+    },
+    {
+      "id": "GM-008",
+      "title": "Stale Symlink/Junction Cleanup",
+      "priority": 8,
+      "acceptanceCriteria": [
+        "Broken symlinks (Bash) and broken junctions (PowerShell) are detected",
+        "Cleanup runs on dashboard startup when --all/-All is used",
+        "Cleanup runs periodically in ralph.sh/ralph.ps1 cleanup functions",
+        "ralph-cleanup.sh --global and ralph-cleanup.ps1 -Global for manual cleanup",
+        "Cleanup logs removed entries",
+        "Tests pass: broken links are removed automatically"
+      ],
+      "passes": false,
+      "notes": "Add --global/-Global flag to cleanup scripts for global registry maintenance.",
+      "claimedBy": null
+    },
+    {
+      "id": "GM-009",
+      "title": "Global Registry in Status Output",
+      "priority": 9,
+      "acceptanceCriteria": [
+        "ralph-status.sh shows Global: registered or Global: not registered",
+        "ralph-status.ps1 shows equivalent status information",
+        "Shows path to global symlink/junction when registered",
+        "--global/-Global flag shows all globally registered instances",
+        "Tests pass: status correctly reports global registration"
+      ],
+      "passes": false,
+      "notes": "Update status scripts to show global registration state.",
+      "claimedBy": null
+    },
+    {
+      "id": "GM-010",
+      "title": "RalphUtils.psm1 Global Functions",
+      "priority": 10,
+      "acceptanceCriteria": [
+        "Get-RalphGlobalDir function returns the global registry path",
+        "Register-RalphGlobalInstance creates global junction for an instance",
+        "Unregister-RalphGlobalInstance removes global junction",
+        "Get-RalphGlobalInstances lists all globally registered instances",
+        "Clear-RalphStaleGlobalEntries removes broken junctions",
+        "All functions are exported from RalphUtils.psm1",
+        "Tests pass: all global functions work correctly"
+      ],
+      "passes": false,
+      "notes": "Add reusable PowerShell functions for global registry operations to RalphUtils.psm1.",
+      "claimedBy": null
     }
   ],
   "qualityChecks": {
-    "lint-bash": "shellcheck install-skills.sh",
-    "lint-ps": "pwsh -Command \"Invoke-ScriptAnalyzer -Path scripts/ralph/install-skills.ps1\"",
-    "test": "pwsh -Command \"Invoke-Pester scripts/ralph/tests/install-skills.Tests.ps1 -Output Detailed\""
+    "pester": "Invoke-Pester -Path ./tests/ -PassThru",
+    "bash_tests": "bash tests/test-multi-instance.sh && bash tests/test-scripts.sh",
+    "syntax_ps": "Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object { $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$null) }",
+    "syntax_bash": "find . -name '*.sh' -exec bash -n {} \\;"
   },
   "techStack": {
-    "shell": "Bash 4+ and PowerShell 7+",
-    "testing": "Pester 5.x for PowerShell",
-    "linting": "shellcheck for bash, PSScriptAnalyzer for PowerShell"
+    "powershell": "7.0+",
+    "bash": "4.0+",
+    "testing_ps": "Pester 5+",
+    "testing_bash": "Native bash",
+    "globalDir_unix": "~/.ralph/global/",
+    "globalDir_windows": "$env:USERPROFILE\\.ralph\\global\\",
+    "links_unix": "symlinks (ln -sfn)",
+    "links_windows": "junctions (New-Item -ItemType Junction)"
+  },
+  "compatibility": {
+    "symlinkFormat": "{project-basename}-{instance-id}",
+    "globalInstancesPath": "~/.ralph/global/instances/ or %USERPROFILE%\\.ralph\\global\\instances\\",
+    "statusFormat": "Existing JSON with instanceId, projectRoot fields used for identification"
   }
 }
