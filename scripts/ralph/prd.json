@@ -1,192 +1,214 @@
 {
-  "featureName": "Global Cross-Project Ralph Monitoring Infrastructure",
-  "branchName": "ralph/global-monitoring",
-  "description": "Enable ralph-dashboard to monitor Ralph instances across multiple projects from a central registry at ~/.ralph/global/ (Linux/macOS) or $env:USERPROFILE\\.ralph\\global\\ (Windows). Full cross-platform support for both Bash and PowerShell implementations.",
+  "featureName": "PowerShell/Bash Script Parity",
+  "branchName": "ralph/ps-bash-parity",
+  "description": "Ensure full feature parity between PowerShell and Bash implementations of ralph scripts. Create missing bash equivalents (ralph-once.sh, ralph-parallel.sh), add global registry functions, and audit existing implementations for consistency.",
   "userStories": [
     {
-      "id": "GM-001",
-      "title": "Global Registry Directory Structure",
+      "id": "PS-001",
+      "title": "Create ralph-once.sh Bash Script",
       "priority": 1,
       "acceptanceCriteria": [
-        "~/.ralph/global/instances/ directory is created on first Ralph run (Bash)",
-        "$env:USERPROFILE\\.ralph\\global\\instances\\ directory is created on first Ralph run (PowerShell)",
-        "~/.ralph/global/locks/ directory is created for future global lock support",
-        "Directory structure is created with appropriate permissions (700 on Unix)",
-        "Existing local functionality continues to work unchanged",
-        "Both ralph.sh and ralph.ps1 create the same directory structure",
-        "Tests pass: directory creation works on both platforms"
+        "Create scripts/ralph/ralph-once.sh with same functionality as ralph-once.ps1",
+        "Script sources ralph-utils.sh for shared utilities",
+        "Shows banner and current PRD status on startup",
+        "Runs single Claude Code iteration with prompt.md",
+        "Captures and displays Claude Code output",
+        "Checks for completion signal <promise>COMPLETE</promise>",
+        "Reports progress difference before/after iteration",
+        "Script is executable (chmod +x)",
+        "Manual test: ./ralph-once.sh executes single iteration successfully"
       ],
       "passes": true,
-      "notes": "Foundation story - creates the global registry directories. Add RALPH_GLOBAL_DIR env var override support.",
+      "notes": "Single iteration runner for testing and manual control. No loop, no archive.",
       "claimedBy": null
     },
     {
-      "id": "GM-002",
-      "title": "Global Instance Registration (Bash)",
+      "id": "PS-002",
+      "title": "Create ralph-parallel.sh Bash Script",
       "priority": 2,
       "acceptanceCriteria": [
-        "ralph.sh creates a symlink in ~/.ralph/global/instances/ pointing to the local instance directory",
-        "Symlink name follows format: {project-name}-{instance-id} for uniqueness",
-        "Symlink is created atomically using ln -sfn",
-        "Registration happens in init_instance() function",
-        "Local instance directory still exists and functions normally",
-        "RALPH_GLOBAL_DISABLE=1 skips global registration",
-        "Tests pass: symlink created and resolves correctly"
-      ],
-      "passes": false,
-      "notes": "Bash implementation of global registration. Uses basename of PROJECT_ROOT for project-name.",
-      "claimedBy": "uge-uge-X670E-AORUS-XTREME-701263-1769645040"
-    },
-    {
-      "id": "GM-003",
-      "title": "Global Instance Registration (PowerShell)",
-      "priority": 3,
-      "acceptanceCriteria": [
-        "ralph.ps1 creates a junction in $env:USERPROFILE\\.ralph\\global\\instances\\",
-        "Uses New-Item -ItemType Junction for directory links (works without admin on Windows)",
-        "Junction name follows same format: {project-name}-{instance-id}",
-        "Registration happens in Initialize-Instance or equivalent function",
-        "Fallback to copying status.json if junction creation fails",
-        "$env:RALPH_GLOBAL_DISABLE=1 skips global registration",
-        "Tests pass: junction created and resolves correctly"
-      ],
-      "passes": false,
-      "notes": "PowerShell implementation of global registration. Junction points work on NTFS without admin.",
-      "claimedBy": null
-    },
-    {
-      "id": "GM-004",
-      "title": "Global Instance Deregistration",
-      "priority": 4,
-      "acceptanceCriteria": [
-        "ralph.sh removes the global symlink in cleanup_on_exit()",
-        "ralph.ps1 removes the global junction in cleanup handler",
-        "Removal is idempotent (no error if already removed)",
-        "Local instance cleanup still functions normally",
-        "Deregistration logs the action",
-        "Tests pass: cleanup removes global entries"
+        "Create scripts/ralph/ralph-parallel.sh with same functionality as ralph-parallel.ps1",
+        "Supports commands: start, stop, kill, status, dashboard, help",
+        "Start command accepts -c COUNT and -m MAX_ITERATIONS options",
+        "Uses background processes (&) for parallel execution",
+        "Stores job PIDs in instances/running-jobs.json",
+        "Stop command sends SIGTERM to running processes",
+        "Kill command sends SIGKILL to running processes",
+        "Status command shows running instances, locks, and PRD progress",
+        "Dashboard command launches ralph-dashboard.sh",
+        "Respects RALPH_MAX_INSTANCES environment variable (default: 8)",
+        "Script is executable",
+        "Manual test: ./ralph-parallel.sh start -c 2 launches 2 instances"
       ],
       "passes": true,
-      "notes": "Both Bash and PowerShell implementations for cleanup on exit.",
-      "claimedBy": "uge-uge-X670E-AORUS-XTREME-584981-1769642051"
+      "notes": "Parallel instance launcher using bash background jobs. CPU cores / 2 as default count.",
+      "claimedBy": null
     },
     {
-      "id": "GM-005",
-      "title": "Dashboard Global View Mode (Bash)",
+      "id": "PS-003",
+      "title": "Add Global Registry Functions to ralph-utils.sh",
+      "priority": 3,
+      "acceptanceCriteria": [
+        "Add get_ralph_global_link_name() function to ralph-utils.sh",
+        "Add register_ralph_global_instance() function that creates symlink",
+        "Add unregister_ralph_global_instance() function that removes symlink",
+        "Functions create/remove symlinks in ~/.ralph/global/instances/",
+        "Link name format: {project-name}-{instance-id}",
+        "Functions respect RALPH_GLOBAL_DISABLE=1 environment variable",
+        "ralph.sh calls register on startup in init_instance()",
+        "ralph.sh calls unregister in cleanup_on_exit()",
+        "Manual test: run ralph and verify symlink appears in ~/.ralph/global/instances/"
+      ],
+      "passes": false,
+      "notes": "GM-004 bash implementation. Symlinks allow global dashboard to monitor across projects.",
+      "claimedBy": "eugen-FRAMEWORK16-UGE-23468-1769677604"
+    },
+    {
+      "id": "PS-004",
+      "title": "Verify PowerShell RalphUtils.psm1 Global Registry Parity",
+      "priority": 4,
+      "acceptanceCriteria": [
+        "Verify Get-RalphGlobalDir matches bash get_ralph_global_dir()",
+        "Verify Initialize-RalphGlobalRegistry matches bash init_ralph_global_registry()",
+        "Add Get-RalphGlobalLinkName function if missing",
+        "Add Register-RalphGlobalInstance function if missing",
+        "Add Unregister-RalphGlobalInstance function if missing",
+        "Export new functions in module Export-ModuleMember",
+        "Update ralph.ps1 to call register/unregister appropriately",
+        "Manual test: run ralph.ps1 and verify junction in ~/.ralph/global/instances/"
+      ],
+      "passes": false,
+      "notes": "Ensure PowerShell has full global registry support matching bash.",
+      "claimedBy": null
+    },
+    {
+      "id": "PS-005",
+      "title": "Audit ralph-cleanup.ps1 vs ralph-cleanup.sh",
       "priority": 5,
       "acceptanceCriteria": [
-        "--all flag sets INSTANCES_DIR to ~/.ralph/global/instances/",
-        "Dashboard resolves symlinks to read actual status.json files",
-        "Instance display includes project name extracted from symlink name",
-        "Header shows GLOBAL VIEW indicator when in global mode",
-        "PRD progress bar is hidden in global mode (no single PRD)",
-        "Tests pass: dashboard shows instances from multiple projects"
+        "Compare ralph-cleanup.ps1 and ralph-cleanup.sh line-by-line",
+        "Verify same CLI options: -d/--dead, -o/--old, -a/--all, --dry-run/-WhatIf",
+        "Verify same TTL handling (RALPH_CLEANUP_TTL env var, default 7 days)",
+        "Verify dead instance detection uses same 5-minute threshold",
+        "Verify lock release behavior is identical",
+        "Fix any discrepancies found in either script",
+        "Manual test: create old/dead instances and verify both scripts clean them up identically"
       ],
       "passes": false,
-      "notes": "Update ralph-dashboard.sh to support --all flag for global view.",
+      "notes": "Cleanup scripts must behave identically for cross-platform consistency.",
       "claimedBy": null
     },
     {
-      "id": "GM-006",
-      "title": "Dashboard Global View Mode (PowerShell)",
+      "id": "PS-006",
+      "title": "Audit ralph-dashboard.ps1 vs ralph-dashboard.sh",
       "priority": 6,
       "acceptanceCriteria": [
-        "-All switch sets instances path to global directory",
-        "Dashboard resolves junctions to read actual status.json files",
-        "Instance display includes project name extracted from junction name",
-        "Header shows GLOBAL VIEW indicator when in global mode",
-        "PRD progress bar is hidden in global mode",
-        "Uses Get-Item to resolve junction targets",
-        "Tests pass: dashboard shows instances from multiple projects"
+        "Compare ralph-dashboard.ps1 and ralph-dashboard.sh output format",
+        "Verify same Unicode box-drawing characters used",
+        "Verify same color coding for states (working=green, dead=red, etc.)",
+        "Verify same keyboard shortcuts (q=quit, r=refresh, l=locks, c=cleanup)",
+        "Verify refresh interval handling is identical",
+        "Verify progress bar rendering matches visually",
+        "Fix any visual or behavioral discrepancies",
+        "Manual test: run both side-by-side with same data"
       ],
       "passes": false,
-      "notes": "Update ralph-dashboard.ps1 to support -All switch for global view.",
+      "notes": "TUI dashboard should look identical on both platforms.",
       "claimedBy": null
     },
     {
-      "id": "GM-007",
-      "title": "Dashboard Repository Filter",
+      "id": "PS-007",
+      "title": "Audit ralph-locks.ps1 vs ralph-locks.sh",
       "priority": 7,
       "acceptanceCriteria": [
-        "--repo PATH (Bash) and -Repo PATH (PowerShell) filter instances by projectRoot",
-        "Filter works with both absolute and relative paths",
-        "Filter works in both local and global modes",
-        "Partial path matching is supported (e.g., --repo mojo-ode matches /home/user/mojo-ode)",
-        "Message shown if no instances match the filter",
-        "Tests pass: filter correctly limits displayed instances"
+        "Compare ralph-locks.ps1 and ralph-locks.sh command sets",
+        "Verify same commands: status, release, release-all, cleanup",
+        "Verify age formatting is consistent (Ns, Nm, Nh)",
+        "Verify stale lock threshold is same (2 hours / 7200s)",
+        "Verify dead owner detection uses same logic",
+        "Fix any discrepancies found in either script",
+        "Manual test: create locks and verify both scripts show/release them identically"
       ],
       "passes": false,
-      "notes": "Implement --repo/-Repo filter in both dashboard implementations.",
+      "notes": "Lock management must work the same across platforms.",
       "claimedBy": null
     },
     {
-      "id": "GM-008",
-      "title": "Stale Symlink/Junction Cleanup",
+      "id": "PS-008",
+      "title": "Audit ralph-status.ps1 vs ralph-status.sh",
       "priority": 8,
       "acceptanceCriteria": [
-        "Broken symlinks (Bash) and broken junctions (PowerShell) are detected",
-        "Cleanup runs on dashboard startup when --all/-All is used",
-        "Cleanup runs periodically in ralph.sh/ralph.ps1 cleanup functions",
-        "ralph-cleanup.sh --global and ralph-cleanup.ps1 -Global for manual cleanup",
-        "Cleanup logs removed entries",
-        "Tests pass: broken links are removed automatically"
+        "Compare ralph-status.ps1 and ralph-status.sh output format",
+        "Verify progress bar rendering matches visually",
+        "Verify story table format is identical (columns, widths)",
+        "Verify color coding for complete/pending matches",
+        "Verify incomplete stories list is sorted by priority",
+        "Fix any discrepancies found in either script",
+        "Manual test: run both with same prd.json and compare output"
       ],
       "passes": false,
-      "notes": "Add --global/-Global flag to cleanup scripts for global registry maintenance.",
+      "notes": "Status output should be visually identical on both platforms.",
       "claimedBy": null
     },
     {
-      "id": "GM-009",
-      "title": "Global Registry in Status Output",
+      "id": "PS-009",
+      "title": "Audit Main Loop ralph.ps1 vs ralph.sh",
       "priority": 9,
       "acceptanceCriteria": [
-        "ralph-status.sh shows Global: registered or Global: not registered",
-        "ralph-status.ps1 shows equivalent status information",
-        "Shows path to global symlink/junction when registered",
-        "--global/-Global flag shows all globally registered instances",
-        "Tests pass: status correctly reports global registration"
+        "Compare story claiming logic (priority sorting, lock acquisition)",
+        "Compare branch creation/merge logic (ralph/{short-id}/{story-id} format)",
+        "Compare completion signal detection (<promise>COMPLETE</promise>)",
+        "Compare heartbeat/status update frequency",
+        "Compare cleanup on exit (signal handling, stash changes)",
+        "Verify same iteration delay (2 seconds between iterations)",
+        "Verify same retry logic (5 retries, 30s delay for claiming)",
+        "Fix any discrepancies found in either script",
+        "Manual test: run both through one iteration with debug logging"
       ],
       "passes": false,
-      "notes": "Update status scripts to show global registration state.",
+      "notes": "Main loop behavior must be identical for consistent automation.",
       "claimedBy": null
     },
     {
-      "id": "GM-010",
-      "title": "RalphUtils.psm1 Global Functions",
+      "id": "PS-010",
+      "title": "Update CLAUDE.md Documentation",
       "priority": 10,
       "acceptanceCriteria": [
-        "Get-RalphGlobalDir function returns the global registry path",
-        "Register-RalphGlobalInstance creates global junction for an instance",
-        "Unregister-RalphGlobalInstance removes global junction",
-        "Get-RalphGlobalInstances lists all globally registered instances",
-        "Clear-RalphStaleGlobalEntries removes broken junctions",
-        "All functions are exported from RalphUtils.psm1",
-        "Tests pass: all global functions work correctly"
+        "Add ralph-once.sh / ralph-once.ps1 to Commands section",
+        "Add ralph-parallel.sh / ralph-parallel.ps1 to Commands section",
+        "Document all command-line options for each script",
+        "Add examples for parallel execution workflow",
+        "Update Quick Start sections for both bash and PowerShell",
+        "Verify all file paths in documentation are accurate",
+        "Add global registry environment variables (RALPH_GLOBAL_DIR, RALPH_GLOBAL_DISABLE)"
       ],
       "passes": false,
-      "notes": "Add reusable PowerShell functions for global registry operations to RalphUtils.psm1.",
+      "notes": "Documentation must reflect all available scripts and options.",
       "claimedBy": null
     }
   ],
   "qualityChecks": {
-    "pester": "Invoke-Pester -Path ./tests/ -PassThru",
-    "bash_tests": "bash tests/test-multi-instance.sh && bash tests/test-scripts.sh",
-    "syntax_ps": "Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object { $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$null) }",
-    "syntax_bash": "find . -name '*.sh' -exec bash -n {} \\;"
+    "pester": "Invoke-Pester -Path ./scripts/ralph/tests/ -PassThru",
+    "syntax_ps": "Get-ChildItem -Path ./scripts/ralph -Filter *.ps1 | ForEach-Object { $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$null) }",
+    "syntax_bash": "find ./scripts/ralph -name '*.sh' -exec bash -n {} \\;",
+    "shellcheck": "shellcheck ./scripts/ralph/*.sh 2>/dev/null || true"
   },
   "techStack": {
     "powershell": "7.0+",
     "bash": "4.0+",
     "testing_ps": "Pester 5+",
-    "testing_bash": "Native bash",
-    "globalDir_unix": "~/.ralph/global/",
-    "globalDir_windows": "$env:USERPROFILE\\.ralph\\global\\",
-    "links_unix": "symlinks (ln -sfn)",
-    "links_windows": "junctions (New-Item -ItemType Junction)"
+    "jq": "Required for bash JSON parsing",
+    "git": "Required for branch operations"
   },
   "compatibility": {
-    "symlinkFormat": "{project-basename}-{instance-id}",
-    "globalInstancesPath": "~/.ralph/global/instances/ or %USERPROFILE%\\.ralph\\global\\instances\\",
-    "statusFormat": "Existing JSON with instanceId, projectRoot fields used for identification"
+    "platforms": [
+      "Linux",
+      "macOS",
+      "Windows"
+    ],
+    "globalDir_unix": "~/.ralph/global/",
+    "globalDir_windows": "$env:USERPROFILE\\.ralph\\global\\",
+    "parallelJobs_bash": "Background processes with & and PIDs",
+    "parallelJobs_ps": "PowerShell Start-Job"
   }
 }
