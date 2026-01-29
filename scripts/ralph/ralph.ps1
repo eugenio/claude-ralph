@@ -303,6 +303,9 @@ function Main {
     $script:InstancePaths = New-RalphInstanceDirectory
     Register-RalphCleanup
 
+    # Register in global registry (PS-004)
+    $null = Register-RalphGlobalInstance
+
     # Show banner
     Show-Banner
 

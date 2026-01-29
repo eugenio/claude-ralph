@@ -181,3 +181,21 @@
   - ralph.sh has its own copy of global registry functions (doesn't source ralph-utils.sh)
   - Instance ID changes each time script is sourced (due to timestamp component)
 ---
+
+## 2026-01-29 - PS-004
+- What was implemented:
+  - Added Get-RalphGlobalLinkName function to RalphUtils.psm1 - returns {project-name}-{instance-id}
+  - Added Register-RalphGlobalInstance function - creates junction (Windows) or symlink (Unix)
+  - Added Unregister-RalphGlobalInstance function - removes link from global registry
+  - Exported new functions in Export-ModuleMember
+  - Updated ralph.ps1 to call Register-RalphGlobalInstance after New-RalphInstanceDirectory
+  - Updated Invoke-RalphCleanup to call Unregister-RalphGlobalInstance during shutdown
+- Files changed:
+  - scripts/ralph/RalphUtils.psm1 (added 3 global registry instance functions, updated cleanup)
+  - scripts/ralph/ralph.ps1 (added Register-RalphGlobalInstance call in Main)
+- **Learnings for future iterations:**
+  - Use New-Item -ItemType Junction on Windows (doesn't require admin privileges)
+  - Use New-Item -ItemType SymbolicLink on Unix
+  - $IsWindows automatic variable works in PowerShell 7+, use $env:OS for older versions
+  - PowerShell functions should have [CmdletBinding()] and [OutputType()] for discoverability
+---

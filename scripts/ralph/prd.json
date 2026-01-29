@@ -77,9 +77,9 @@
         "Update ralph.ps1 to call register/unregister appropriately",
         "Manual test: run ralph.ps1 and verify junction in ~/.ralph/global/instances/"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Ensure PowerShell has full global registry support matching bash.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-37140-1769677229"
+      "claimedBy": null
     },
     {
       "id": "PS-005",
@@ -96,7 +96,7 @@
       ],
       "passes": false,
       "notes": "Cleanup scripts must behave identically for cross-platform consistency.",
-      "claimedBy": null
+      "claimedBy": "eugen-FRAMEWORK16-UGE-23468-1769677604"
     },
     {
       "id": "PS-006",
