@@ -166,11 +166,11 @@ function Clear-OldInstances {
         }
     }
 
-    if ($cleaned -eq 0) {
+    if ($cleaned -eq 0 -and -not $WhatIfPreference) {
         Write-Host "No old instances found (TTL: $ttlDays days)" -ForegroundColor Green
     }
     elseif ($WhatIfPreference) {
-        Write-Host "Would remove old instances" -ForegroundColor Yellow
+        Write-Host "Would remove old instances (TTL: $ttlDays days)" -ForegroundColor Yellow
     }
     else {
         Write-Host "Removed $cleaned old instances" -ForegroundColor Green

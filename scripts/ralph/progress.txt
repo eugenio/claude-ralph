@@ -199,3 +199,21 @@
   - $IsWindows automatic variable works in PowerShell 7+, use $env:OS for older versions
   - PowerShell functions should have [CmdletBinding()] and [OutputType()] for discoverability
 ---
+
+## 2026-01-29 - PS-006
+- What was implemented:
+  - Audited ralph-dashboard.ps1 vs ralph-dashboard.sh for visual and behavioral parity
+  - Fixed frame width discrepancy: bash used FRAME_WIDTH=75 while PowerShell used 73
+  - Verified matching Unicode box-drawing characters (╔╗╚╝═║╠╣)
+  - Verified matching color coding for states (working/merging=green, claiming/starting=cyan, idle=yellow, completed=blue, terminated/max_iterations=gray, dead=red)
+  - Verified matching keyboard shortcuts (q=quit, r=refresh, l=locks, c=cleanup)
+  - Verified matching refresh interval handling (default 2s, 100ms polling)
+  - Verified matching progress bar rendering (█ filled, ░ empty)
+- Files changed:
+  - scripts/ralph/ralph-dashboard.sh (changed FRAME_WIDTH from 75 to 73)
+- **Learnings for future iterations:**
+  - Frame widths must match exactly for visual parity across platforms
+  - PowerShell uses 73-character frame width for dashboard TUI
+  - Both scripts use same Unicode progress bar characters: U+2588 (█) and U+2591 (░)
+  - Interactive TUI apps use 100ms polling intervals for responsive keyboard input
+---

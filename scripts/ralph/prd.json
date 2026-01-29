@@ -94,9 +94,9 @@
         "Fix any discrepancies found in either script",
         "Manual test: create old/dead instances and verify both scripts clean them up identically"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Cleanup scripts must behave identically for cross-platform consistency.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-23468-1769677604"
+      "claimedBy": null
     },
     {
       "id": "PS-006",
@@ -112,7 +112,7 @@
         "Fix any visual or behavioral discrepancies",
         "Manual test: run both side-by-side with same data"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "TUI dashboard should look identical on both platforms.",
       "claimedBy": null
     },
