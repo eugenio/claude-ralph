@@ -87,10 +87,10 @@ calculate_section_limits() {
     MAX_INSTANCES=$((available * 5 / 9))
     MAX_LOCKS=$((available - MAX_PROJECTS - MAX_INSTANCES))
 
-    # Enforce minimums
-    [[ "$MAX_PROJECTS" -lt 1 ]] && MAX_PROJECTS=1
-    [[ "$MAX_INSTANCES" -lt 1 ]] && MAX_INSTANCES=1
-    [[ "$MAX_LOCKS" -lt 1 ]] && MAX_LOCKS=1
+    # Enforce minimums (use || true to prevent set -e from exiting)
+    [[ "$MAX_PROJECTS" -lt 1 ]] && MAX_PROJECTS=1 || true
+    [[ "$MAX_INSTANCES" -lt 1 ]] && MAX_INSTANCES=1 || true
+    [[ "$MAX_LOCKS" -lt 1 ]] && MAX_LOCKS=1 || true
 }
 
 # Unicode box drawing characters
