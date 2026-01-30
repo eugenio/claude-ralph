@@ -244,6 +244,32 @@ EOF
     mv "$tmp_file" "$STATUS_FILE"
 }
 
+# Background heartbeat process
+HEARTBEAT_PID=""
+
+start_heartbeat() {
+    # Start background process that updates heartbeat every 30 seconds
+    (
+        while true; do
+            sleep 30
+            if [[ -f "$STATUS_FILE" ]]; then
+                local current_state=$(jq -r '.state // "working"' "$STATUS_FILE" 2>/dev/null)
+                local current_story=$(jq -r '.currentStory // ""' "$STATUS_FILE" 2>/dev/null)
+                update_status "$current_state" "$current_story"
+            fi
+        done
+    ) &
+    HEARTBEAT_PID=$!
+}
+
+stop_heartbeat() {
+    if [[ -n "$HEARTBEAT_PID" ]] && kill -0 "$HEARTBEAT_PID" 2>/dev/null; then
+        kill "$HEARTBEAT_PID" 2>/dev/null || true
+        wait "$HEARTBEAT_PID" 2>/dev/null || true
+        HEARTBEAT_PID=""
+    fi
+}
+
 cleanup_old_instances() {
     local ttl_days="${RALPH_CLEANUP_TTL:-7}"
     local cutoff=$(date -d "$ttl_days days ago" +%s 2>/dev/null || echo "0")
@@ -616,6 +642,10 @@ unregister_ralph_global_instance() {
 
 cleanup_on_exit() {
     log "Shutting down instance..."
+
+    # Stop background heartbeat if running
+    stop_heartbeat
+
     update_status "terminated" "$CURRENT_STORY_ID"
 
     # Release all locks
@@ -818,6 +848,9 @@ main() {
         # Run Claude Code with the prompt
         echo -e "${YELLOW}Running Claude Code for $CURRENT_STORY_ID...${NC}"
 
+        # Start background heartbeat to keep instance alive during long Claude runs
+        start_heartbeat
+
         cd "$PROJECT_ROOT"
         # Use tee to log file; only copy to stderr if it's available (not in background mode)
         local tee_target="$INSTANCE_DIR/claude-output.log"
@@ -835,6 +868,10 @@ main() {
                 --verbose \
                 2>&1 | tee "$tee_target") || claude_exit_code=$?
         fi
+
+        # Stop heartbeat after Claude finishes
+        stop_heartbeat
+
         if [ $claude_exit_code -ne 0 ]; then
             log "⚠️  Claude Code exited with code $claude_exit_code"
             cd "$SCRIPT_DIR"
