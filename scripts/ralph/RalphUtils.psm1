@@ -1742,31 +1742,31 @@ function New-RalphStoryBranch {
     try {
         Push-Location $paths.ProjectRoot
 
-        # Fetch latest
-        git fetch origin 2>$null
+        # Fetch latest (suppress all output)
+        git fetch origin 2>&1 | Out-Null
 
         # Try to checkout base branch
-        $baseExists = git show-ref --verify --quiet "refs/heads/$baseBranch" 2>$null
+        $null = git show-ref --verify --quiet "refs/heads/$baseBranch" 2>&1
         if ($LASTEXITCODE -eq 0) {
-            git checkout $baseBranch 2>$null
-            git pull origin $baseBranch 2>$null
+            git checkout $baseBranch 2>&1 | Out-Null
+            git pull origin $baseBranch 2>&1 | Out-Null
         }
         else {
             # Try remote
-            $remoteExists = git show-ref --verify --quiet "refs/remotes/origin/$baseBranch" 2>$null
+            $null = git show-ref --verify --quiet "refs/remotes/origin/$baseBranch" 2>&1
             if ($LASTEXITCODE -eq 0) {
-                git checkout -b $baseBranch "origin/$baseBranch" 2>$null
+                git checkout -b $baseBranch "origin/$baseBranch" 2>&1 | Out-Null
             }
         }
 
         # Check if story branch exists
-        $branchExists = git show-ref --verify --quiet "refs/heads/$($script:CurrentStoryBranch)" 2>$null
+        $null = git show-ref --verify --quiet "refs/heads/$($script:CurrentStoryBranch)" 2>&1
         if ($LASTEXITCODE -eq 0) {
-            git checkout $script:CurrentStoryBranch
+            git checkout $script:CurrentStoryBranch 2>&1 | Out-Null
             Add-RalphInstanceLog "Checked out existing branch: $($script:CurrentStoryBranch)"
         }
         else {
-            git checkout -b $script:CurrentStoryBranch
+            git checkout -b $script:CurrentStoryBranch 2>&1 | Out-Null
             Add-RalphInstanceLog "Created new branch: $($script:CurrentStoryBranch)"
         }
 
@@ -1774,7 +1774,7 @@ function New-RalphStoryBranch {
     }
     catch {
         Write-Warning "Failed to create story branch: $_"
-        return $null
+        return ''
     }
     finally {
         Pop-Location
