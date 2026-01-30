@@ -582,13 +582,59 @@ function Install-RalphFunctionsToProfile {
     }
 }
 
+function Backup-ProfileFile {
+    <#
+    .SYNOPSIS
+        Creates a backup of the profile file before modification.
+    .DESCRIPTION
+        Copies the profile file to a .bak file in the same directory.
+        Overwrites any existing backup file.
+    .PARAMETER ProfilePath
+        Path to the PowerShell profile file.
+    .OUTPUTS
+        Hashtable with Success, BackupPath, and Message properties.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ProfilePath
+    )
+
+    if (-not (Test-Path $ProfilePath)) {
+        return @{
+            Success    = $true
+            BackupPath = $null
+            Message    = 'No backup needed - profile does not exist'
+        }
+    }
+
+    $backupPath = "$ProfilePath.bak"
+
+    try {
+        Copy-Item -Path $ProfilePath -Destination $backupPath -Force -ErrorAction Stop
+        return @{
+            Success    = $true
+            BackupPath = $backupPath
+            Message    = "Backup created: $backupPath"
+        }
+    }
+    catch {
+        return @{
+            Success    = $false
+            BackupPath = $null
+            Message    = "Failed to create backup: $_"
+        }
+    }
+}
+
 function Update-RalphFunctionsInProfile {
     <#
     .SYNOPSIS
         Updates Ralph functions block in-place in the profile.
     .DESCRIPTION
         Replaces the existing Ralph functions section while preserving
-        all other profile content.
+        all other profile content. Creates a backup file (.bak) before modification.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -609,41 +655,59 @@ function Update-RalphFunctionsInProfile {
     }
 
     try {
+        # Create backup before modification
+        $backupResult = Backup-ProfileFile -ProfilePath $ProfilePath
+        if (-not $backupResult.Success) {
+            return @{
+                Success     = $false
+                ProfilePath = $ProfilePath
+                Message     = $backupResult.Message
+            }
+        }
+
         # Read the profile content
         $content = Get-Content -Path $ProfilePath -Raw -ErrorAction Stop
+
+        # Detect original line ending style (CRLF vs LF)
+        $lineEnding = if ($content -match "`r`n") { "`r`n" } else { "`n" }
+
         $lines = $content -split "`r?`n"
 
         # Build new content: before Ralph block + new block + after Ralph block
         $beforeBlock = if ($installed.StartLine -gt 0) {
-            $lines[0..($installed.StartLine - 1)] -join "`n"
+            $lines[0..($installed.StartLine - 1)] -join $lineEnding
         } else { '' }
 
         $afterBlock = if ($installed.EndLine -lt ($lines.Count - 1)) {
-            $lines[($installed.EndLine + 1)..($lines.Count - 1)] -join "`n"
+            $lines[($installed.EndLine + 1)..($lines.Count - 1)] -join $lineEnding
         } else { '' }
 
         # Construct new content (trim the leading newline from FunctionBlock if beforeBlock is empty)
+        # Also convert FunctionBlock line endings to match original
+        # First normalize to LF, then convert to target line ending
+        $normalizedBlock = $expected.FunctionBlock -replace "`r`n", "`n"
         $newFunctionBlock = if ($beforeBlock) {
-            $expected.FunctionBlock
+            $normalizedBlock -replace "`n", $lineEnding
         } else {
-            $expected.FunctionBlock.TrimStart("`n")
+            ($normalizedBlock.TrimStart("`n")) -replace "`n", $lineEnding
         }
 
         $newContent = if ($beforeBlock -and $afterBlock) {
-            "$beforeBlock`n$newFunctionBlock`n$afterBlock"
+            "$beforeBlock$lineEnding$newFunctionBlock$lineEnding$afterBlock"
         }
         elseif ($beforeBlock) {
-            "$beforeBlock`n$newFunctionBlock"
+            "$beforeBlock$lineEnding$newFunctionBlock"
         }
         elseif ($afterBlock) {
-            "$newFunctionBlock`n$afterBlock"
+            "$newFunctionBlock$lineEnding$afterBlock"
         }
         else {
             $newFunctionBlock
         }
 
-        # Write back to profile
-        Set-Content -Path $ProfilePath -Value $newContent -NoNewline -ErrorAction Stop
+        # Write back to profile preserving encoding and line endings using raw file API
+        # PowerShell's Set-Content may alter line endings on Windows
+        [System.IO.File]::WriteAllText($ProfilePath, $newContent)
 
         return @{
             Success       = $true
@@ -651,6 +715,7 @@ function Update-RalphFunctionsInProfile {
             Message       = 'Ralph functions updated in-place'
             AlreadyExists = $false
             Action        = 'update'
+            BackupPath    = $backupResult.BackupPath
         }
     }
     catch {
@@ -668,7 +733,7 @@ function Reinstall-RalphFunctionsInProfile {
         Removes old Ralph functions block and appends fresh one.
     .DESCRIPTION
         Completely removes the existing Ralph section and adds a new one
-        at the end of the profile.
+        at the end of the profile. Creates a backup file (.bak) before modification.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -688,22 +753,36 @@ function Reinstall-RalphFunctionsInProfile {
     }
 
     try {
+        # Create backup before modification
+        $backupResult = Backup-ProfileFile -ProfilePath $ProfilePath
+        if (-not $backupResult.Success) {
+            return @{
+                Success     = $false
+                ProfilePath = $ProfilePath
+                Message     = $backupResult.Message
+            }
+        }
+
         # Read the profile content
         $content = Get-Content -Path $ProfilePath -Raw -ErrorAction Stop
+
+        # Detect original line ending style (CRLF vs LF)
+        $lineEnding = if ($content -match "`r`n") { "`r`n" } else { "`n" }
+
         $lines = $content -split "`r?`n"
 
         # Build new content: before Ralph block + after Ralph block
         $beforeBlock = if ($installed.StartLine -gt 0) {
-            $lines[0..($installed.StartLine - 1)] -join "`n"
+            $lines[0..($installed.StartLine - 1)] -join $lineEnding
         } else { '' }
 
         $afterBlock = if ($installed.EndLine -lt ($lines.Count - 1)) {
-            $lines[($installed.EndLine + 1)..($lines.Count - 1)] -join "`n"
+            $lines[($installed.EndLine + 1)..($lines.Count - 1)] -join $lineEnding
         } else { '' }
 
         # Construct new content without the old Ralph block
         $newContent = if ($beforeBlock -and $afterBlock) {
-            "$beforeBlock`n$afterBlock"
+            "$beforeBlock$lineEnding$afterBlock"
         }
         elseif ($beforeBlock) {
             $beforeBlock
@@ -715,16 +794,20 @@ function Reinstall-RalphFunctionsInProfile {
             ''
         }
 
-        # Write profile without Ralph block
-        if ($newContent) {
-            Set-Content -Path $ProfilePath -Value $newContent -NoNewline -ErrorAction Stop
-        }
-        else {
-            Set-Content -Path $ProfilePath -Value '' -NoNewline -ErrorAction Stop
+        # Append fresh Ralph block (convert line endings to match original)
+        # First normalize to LF, then convert to target line ending
+        $normalizedBlock = $expected.FunctionBlock -replace "`r`n", "`n"
+        $newFunctionBlock = $normalizedBlock -replace "`n", $lineEnding
+
+        # Combine content with new function block
+        $finalContent = if ($newContent) {
+            "$newContent$newFunctionBlock"
+        } else {
+            $newFunctionBlock
         }
 
-        # Append fresh Ralph block
-        Add-Content -Path $ProfilePath -Value $expected.FunctionBlock -ErrorAction Stop
+        # Write back to profile preserving encoding and line endings using raw file API
+        [System.IO.File]::WriteAllText($ProfilePath, $finalContent)
 
         return @{
             Success       = $true
@@ -732,6 +815,7 @@ function Reinstall-RalphFunctionsInProfile {
             Message       = 'Ralph functions reinstalled (removed old, added fresh)'
             AlreadyExists = $false
             Action        = 'reinstall'
+            BackupPath    = $backupResult.BackupPath
         }
     }
     catch {

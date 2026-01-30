@@ -1439,3 +1439,286 @@ Describe 'Show-AliasInstructions Extended Commands' {
         $script:scriptContent | Should -Match 'ralph-dashboard\s+-\s+Monitor ralph instances'
     }
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# US-003: In-Place Profile Update with Backup Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+Describe 'Backup-ProfileFile Function' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    It 'Script defines Backup-ProfileFile function' {
+        $script:scriptContent | Should -Match 'function Backup-ProfileFile'
+    }
+
+    Context 'When profile does not exist' {
+        It 'Returns Success = $true with no backup needed' {
+            $nonExistentPath = Join-Path $TestDrive 'nonexistent_backup_profile.ps1'
+            $result = Backup-ProfileFile -ProfilePath $nonExistentPath
+
+            $result.Success | Should -Be $true
+            $result.BackupPath | Should -BeNullOrEmpty
+            $result.Message | Should -Match 'No backup needed'
+        }
+    }
+
+    Context 'When profile exists' {
+        It 'Creates .bak file with original content' {
+            $profilePath = Join-Path $TestDrive 'backup_test_profile.ps1'
+            $originalContent = @"
+# My profile
+Set-Alias ll ls
+"@
+            Set-Content -Path $profilePath -Value $originalContent
+
+            $result = Backup-ProfileFile -ProfilePath $profilePath
+
+            $result.Success | Should -Be $true
+            $result.BackupPath | Should -Be "$profilePath.bak"
+            Test-Path $result.BackupPath | Should -Be $true
+
+            $backupContent = Get-Content -Path $result.BackupPath -Raw
+            $backupContent | Should -Match 'My profile'
+        }
+
+        It 'Overwrites existing backup file' {
+            $profilePath = Join-Path $TestDrive 'backup_overwrite_profile.ps1'
+            $backupPath = "$profilePath.bak"
+
+            # Create old backup
+            Set-Content -Path $backupPath -Value '# Old backup content'
+
+            # Create current profile
+            Set-Content -Path $profilePath -Value '# New profile content'
+
+            $result = Backup-ProfileFile -ProfilePath $profilePath
+
+            $result.Success | Should -Be $true
+            $backupContent = Get-Content -Path $backupPath -Raw
+            $backupContent | Should -Match 'New profile content'
+            $backupContent | Should -Not -Match 'Old backup content'
+        }
+    }
+}
+
+Describe 'Update-RalphFunctionsInProfile Backup Behavior' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    Context 'Backup creation during update' {
+        It 'Creates backup before updating profile' {
+            $profilePath = Join-Path $TestDrive 'update_backup_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+            $result.BackupPath | Should -Be "$profilePath.bak"
+            Test-Path $result.BackupPath | Should -Be $true
+        }
+
+        It 'Backup contains original content before update' {
+            $profilePath = Join-Path $TestDrive 'update_backup_content_profile.ps1'
+            $originalContent = @"
+# My config
+Set-Alias ll ls
+
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+
+# More config
+"@
+            Set-Content -Path $profilePath -Value $originalContent
+
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $backupContent = Get-Content -Path $result.BackupPath -Raw
+            $backupContent | Should -Match '/old/path/'
+        }
+    }
+}
+
+Describe 'Reinstall-RalphFunctionsInProfile Backup Behavior' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    Context 'Backup creation during reinstall' {
+        It 'Creates backup before reinstalling functions' {
+            $profilePath = Join-Path $TestDrive 'reinstall_backup_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result = Reinstall-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+            $result.BackupPath | Should -Be "$profilePath.bak"
+            Test-Path $result.BackupPath | Should -Be $true
+        }
+
+        It 'Returns BackupPath in result' {
+            $profilePath = Join-Path $TestDrive 'reinstall_result_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/test/ralph.ps1" @args }
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result = Reinstall-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Keys | Should -Contain 'BackupPath'
+        }
+    }
+}
+
+Describe 'Line Ending Preservation' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    Context 'Update preserves line endings' {
+        It 'Preserves CRLF line endings when updating' {
+            $profilePath = Join-Path $TestDrive 'crlf_update_profile.ps1'
+            # Write with explicit CRLF
+            $crlfContent = "# My profile`r`nSet-Alias ll ls`r`n`r`n# Ralph functions`r`nfunction ralph { pwsh `"/old/path/ralph.ps1`" @args }`r`n`r`n# End"
+            [System.IO.File]::WriteAllText($profilePath, $crlfContent)
+
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+
+            $updatedContent = [System.IO.File]::ReadAllText($profilePath)
+            # Should still have CRLF
+            $updatedContent | Should -Match "`r`n"
+        }
+
+        It 'Preserves LF line endings when updating' {
+            $profilePath = Join-Path $TestDrive 'lf_update_profile.ps1'
+            # Write with explicit LF only
+            $lfContent = "# My profile`nSet-Alias ll ls`n`n# Ralph functions`nfunction ralph { pwsh `"/old/path/ralph.ps1`" @args }`n`n# End"
+            [System.IO.File]::WriteAllText($profilePath, $lfContent)
+
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+
+            $updatedContent = [System.IO.File]::ReadAllText($profilePath)
+            # Should NOT have CRLF, only LF
+            $updatedContent | Should -Not -Match "`r`n"
+            $updatedContent | Should -Match "`n"
+        }
+    }
+
+    Context 'Reinstall preserves line endings' {
+        It 'Preserves CRLF line endings when reinstalling' {
+            $profilePath = Join-Path $TestDrive 'crlf_reinstall_profile.ps1'
+            $crlfContent = "# My profile`r`nSet-Alias ll ls`r`n`r`n# Ralph functions`r`nfunction ralph { pwsh `"/old/path/ralph.ps1`" @args }`r`n`r`n# End"
+            [System.IO.File]::WriteAllText($profilePath, $crlfContent)
+
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+            $result = Reinstall-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+
+            $updatedContent = [System.IO.File]::ReadAllText($profilePath)
+            $updatedContent | Should -Match "`r`n"
+        }
+    }
+}
+
+Describe 'Edge Case: Ralph Block at Different Positions' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    Context 'Ralph block at start of file' {
+        It 'Handles Ralph block at file start during update' {
+            $profilePath = Join-Path $TestDrive 'start_block_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+
+# My config after
+Set-Alias ll ls
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+
+            $content = Get-Content -Path $profilePath -Raw
+            $content | Should -Match '# Ralph functions'
+            $content | Should -Match 'Set-Alias ll ls'
+            $content | Should -Not -Match '/old/path/'
+        }
+
+        It 'Creates backup for block at file start' {
+            $profilePath = Join-Path $TestDrive 'start_block_backup_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            Test-Path "$profilePath.bak" | Should -Be $true
+        }
+    }
+
+    Context 'Ralph block at end of file' {
+        It 'Handles Ralph block at file end during update' {
+            $profilePath = Join-Path $TestDrive 'end_block_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# My config before
+Set-Alias ll ls
+
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+
+            $content = Get-Content -Path $profilePath -Raw
+            $content | Should -Match 'Set-Alias ll ls'
+            $content | Should -Not -Match '/old/path/'
+        }
+    }
+
+    Context 'Ralph block is only content' {
+        It 'Handles profile with only Ralph functions' {
+            $profilePath = Join-Path $TestDrive 'only_ralph_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+
+            $content = Get-Content -Path $profilePath -Raw
+            $content | Should -Match '# Ralph functions'
+            $content | Should -Match 'function ralph'
+            $content | Should -Not -Match '/old/path/'
+        }
+    }
+}
