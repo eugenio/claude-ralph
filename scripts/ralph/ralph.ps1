@@ -382,9 +382,11 @@ function Main {
                 exit 0
             }
             else {
-                Add-RalphInstanceLog "Stories remain but none available. Another instance may be working. Exiting."
-                Update-RalphStatus -State 'idle' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
-                exit 0
+                Add-RalphInstanceLog "Stories remain but none available. Another instance may be working. Waiting for next iteration..."
+                Update-RalphStatus -State 'waiting' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+                Write-ColoredOutput 'All stories locked by other instances. Waiting 60s before retry...' -Color Yellow
+                Start-Sleep -Seconds 60
+                continue
             }
         }
 

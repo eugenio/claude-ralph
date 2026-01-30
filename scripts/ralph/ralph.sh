@@ -798,9 +798,11 @@ main() {
                 update_status "completed" ""
                 exit 0
             else
-                log "Stories remain but none available. Another instance may be working. Exiting."
-                update_status "idle" ""
-                exit 0
+                log "Stories remain but none available. Another instance may be working. Waiting for next iteration..."
+                update_status "waiting" ""
+                echo -e "${YELLOW}All stories locked by other instances. Waiting 60s before retry...${NC}"
+                sleep 60
+                continue
             fi
         fi
 
