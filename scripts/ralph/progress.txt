@@ -1,257 +1,40 @@
 ## Codebase Patterns
-- Use `eval "$(get_ralph_paths)"` to load path variables in bash scripts
-- jq is required for JSON parsing in bash scripts
-- Shellcheck directives must be on separate lines before the command, not as trailing comments
-- Multi-character Unicode progress bars require careful loop construction (avoid `seq` with printf format strings)
-- Use atomic directory creation `mkdir` for lock acquisition (fails if dir exists)
-- Store heartbeat timestamps as Unix epoch for cross-language compatibility
-- Use flock for file-level locking when available
+- Ralph function definitions in PowerShell profile follow pattern: `function ralph-xxx { pwsh "$path/ralph-xxx.ps1" @args }`
+- Profile parsing should handle both Unix (\n) and Windows (\r\n) line endings using `$content -split "\`r?\`n"`
+- Tests in scripts/ralph/tests/ use Pester 5.x with BeforeAll blocks for test setup
+- When comparing profile functions, use Get-ExpectedRalphFunctions, Get-ProfileRalphFunctions, Compare-RalphFunctions
 
 ---
 
-## 2026-01-28 - US-001
+## 2026-01-30 - US-002: Prompt user for update action
 - What was implemented:
-  - Created scripts/ralph/ralph-utils.sh shared library with bash equivalents of RalphUtils.psm1
-  - Implemented path functions: get_ralph_paths(), get_ralph_dir(), get_project_root()
-  - Implemented PRD functions: read_prd_json(), write_prd_json(), get_prd_status(), get_incomplete_stories()
-  - Implemented multi-instance functions: get_ralph_instance_id(), get_ralph_short_id(), new_ralph_instance_directory(), update_ralph_status(), get_ralph_instances()
-  - Implemented locking functions: lock_ralph_story(), unlock_ralph_story(), test_ralph_story_locked(), get_ralph_story_lock(), get_ralph_story_locks(), clear_ralph_stale_lock(), clear_ralph_stale_locks()
-  - Implemented PRD atomic operations: read_ralph_prd_safe(), update_ralph_prd()
-  - Implemented story claiming: get_ralph_next_story(), request_ralph_story_claim(), release_ralph_story_claim(), request_ralph_next_story_claim()
-  - Implemented utility functions: format_duration(), render_progress_bar(), write_colored(), add_log_entry()
+  - Install-PowerShellAliases now compares existing vs expected functions
+  - Shows current vs expected function count and displays missing/outdated functions
+  - Prompts user with options: (S)kip, (U)pdate, (R)einstall
+  - Skip leaves profile unchanged, Update replaces Ralph block in-place, Reinstall removes old and appends fresh
+  - Added Update-RalphFunctionsInProfile and Reinstall-RalphFunctionsInProfile helper functions
+  - Show-AliasInstructions updated to include ralph-parallel and ralph-dashboard commands
 - Files changed:
-  - scripts/ralph/ralph-utils.sh (created, ~1170 lines)
+  - scripts/ralph/install-skills.ps1 (updated Install-PowerShellAliases with user prompt, added Update/Reinstall functions)
+  - scripts/ralph/tests/install-skills.Tests.ps1 (added 30 new tests for US-002 functionality)
 - **Learnings for future iterations:**
-  - Shellcheck can be installed via direct binary download when package managers aren't available
-  - Function-level shellcheck disable directives work for heredocs
-  - Instance ID format: {user}-{hostname}-{pid}-{timestamp} for uniqueness
-  - Use `|| true` after arithmetic operations that might result in 0 to prevent script exit in strict mode
+  - User prompt uses switch -Regex for case-insensitive matching of S/U/R choices
+  - Update preserves content before and after Ralph block using line positions
+  - Reinstall removes block first then appends fresh one at end
+  - All 139 Pester tests passed
 ---
 
-## 2026-01-28 - US-002
+## 2026-01-30 - US-001: Detect outdated Ralph functions in profile
 - What was implemented:
-  - Created scripts/ralph/ralph-status.sh - bash equivalent of ralph-status.ps1
-  - Display functions: show_banner(), show_progress_summary(), show_story_table(), show_incomplete_stories()
-  - Helper functions: get_git_branch(), repeat_char(), pad_right(), truncate_string()
-  - Sources ralph-utils.sh for shared color codes and functions
-  - Matches PowerShell output format with Unicode box-drawing characters
+  - Added Get-ExpectedRalphFunctions to return expected function definitions based on current Ralph path
+  - Added Get-ProfileRalphFunctions to parse existing profile and extract Ralph block with line positions
+  - Added Compare-RalphFunctions to compare expected vs installed, returning status and diff details
+  - Updated Install-PowerShellAliases to use comparison and return detailed status
 - Files changed:
-  - scripts/ralph/ralph-status.sh (created, ~260 lines)
+  - scripts/ralph/install-skills.ps1 (added 3 new functions, updated Install-PowerShellAliases)
+  - scripts/ralph/tests/install-skills.Tests.ps1 (added 24 new tests)
 - **Learnings for future iterations:**
-  - render_progress_bar() from ralph-utils.sh already includes brackets, don't add extra ones
-  - Use `shellcheck -x` flag to follow sourced files and avoid SC1091 warnings
-  - Path resolution in ralph scripts is relative to script directory via RALPH_SCRIPT_DIR, not cwd
-  - jq with `-c` flag for compact output is useful when iterating over JSON arrays with `while read`
----
-
-## 2026-01-28 - US-003
-- What was implemented:
-  - Created scripts/ralph/ralph-locks.sh - bash equivalent of ralph-locks.ps1
-  - Lock management commands: status, release, release-all, cleanup
-  - Display functions: show_lock_status(), show_help()
-  - Command functions: cmd_release(), cmd_release_all(), cmd_cleanup()
-  - Sources ralph-utils.sh for shared functions (get_ralph_story_locks, unlock_ralph_story, etc.)
-  - Matches PowerShell output format with Unicode box-drawing characters
-  - Color-coded lock status: green=valid, yellow=stale, red=dead owner
-- Files changed:
-  - scripts/ralph/ralph-locks.sh (created, ~285 lines)
-- **Learnings for future iterations:**
-  - Subshell pipelines (e.g., `while read`) cannot increment variables in the parent shell scope
-  - Count locks before the loop rather than incrementing a counter inside a piped while loop
-  - The `-s` flag convention for story ID matches other ralph scripts (e.g., release -s US-001)
----
-
-## 2026-01-28 - US-004
-- What was implemented:
-  - Created scripts/ralph/ralph-cleanup.sh - bash equivalent of ralph-cleanup.ps1
-  - Cleanup functions: show_summary(), clear_dead_instances(), clear_old_instances()
-  - CLI argument parsing with short (-d, -o, -a) and long (--dead, --old, --all) flags
-  - Dry-run mode (--dry-run) for previewing cleanup actions
-  - Instance summary displaying total, running, completed, terminated, dead counts
-  - Releases locks held by dead instances during cleanup
-  - Respects RALPH_CLEANUP_TTL environment variable (default: 7 days)
-- Files changed:
-  - scripts/ralph/ralph-cleanup.sh (created, ~320 lines)
-- **Learnings for future iterations:**
-  - Use `((cleaned++)) || true` to prevent exit on arithmetic result of 0 in strict mode
-  - get_ralph_instances() accepts "all" parameter to include dead instances
-  - Instance state "terminated" means manually terminated, "dead" means no heartbeat > 5 min
-  - Match PowerShell -WhatIf behavior with --dry-run flag in bash scripts
----
-
-## 2026-01-28 - US-005
-- What was implemented:
-  - Created scripts/ralph/ralph-dashboard.sh - bash equivalent of ralph-dashboard.ps1
-  - TUI functions: render_header(), render_instances(), render_locks(), render_footer()
-  - Helper functions: get_progress_bar(), format_duration(), get_state_color(), truncate_string()
-  - Unicode box drawing for TUI frame using BOX_TL, BOX_TR, BOX_BL, BOX_BR, etc.
-  - Auto-refresh loop with configurable interval (default 2 seconds)
-  - Keyboard shortcuts: q=quit, r=refresh, l=locks, c=cleanup
-  - Color-coded instance states: green=working/merging, cyan=claiming/starting, yellow=idle, red=dead
-  - Sources ralph-utils.sh and invokes ralph-locks.sh, ralph-cleanup.sh for detail views
-- Files changed:
-  - scripts/ralph/ralph-dashboard.sh (created, ~495 lines)
-  - Also brought in from other branches: ralph-status.sh, ralph-locks.sh, ralph-cleanup.sh
-- **Learnings for future iterations:**
-  - Use `tput civis` and `tput cnorm` to hide/show cursor in TUI applications
-  - Extract epoch from instance ID using bash parameter expansion: `${instance_id##*-}`
-  - Non-blocking key read: `read -rsn1 -t 0.1` with timeout for responsive TUI
-  - Trap EXIT for cleanup to ensure cursor is restored even on errors
----
-
-## 2026-01-29 - GM-001
-- What was implemented:
-  - Global registry directory structure for cross-project Ralph monitoring
-  - Bash: get_ralph_global_dir(), init_ralph_global_registry() in ralph-utils.sh
-  - Bash: init_global_registry() function in ralph.sh, called from init_instance()
-  - PowerShell: Get-RalphGlobalDir, Initialize-RalphGlobalRegistry in RalphUtils.psm1
-  - PowerShell: Updated ralph.ps1 to call Initialize-RalphGlobalRegistry on startup
-  - RALPH_GLOBAL_DIR env var override support for custom global registry location
-  - RALPH_GLOBAL_DISABLE=1 to skip global registration
-  - Permissions: 700 on Unix for security
-- Files changed:
-  - scripts/ralph/ralph-utils.sh (added global registry functions)
-  - scripts/ralph/ralph.sh (added init_global_registry function)
-  - scripts/ralph/RalphUtils.psm1 (added Get-RalphGlobalDir, Initialize-RalphGlobalRegistry)
-  - scripts/ralph/ralph.ps1 (calls Initialize-RalphGlobalRegistry)
-  - scripts/ralph/tests/RalphUtils.Tests.ps1 (added global registry tests)
-  - scripts/ralph/tests/bash/test-global-registry.sh (new bash test file)
-- **Learnings for future iterations:**
-  - Use $userHome instead of $home in PowerShell tests (HOME is read-only)
-  - [regex]::Escape() must be called and stored in variable before using with Should -Match
-  - Global dir structure: ~/.ralph/global/instances/ and ~/.ralph/global/locks/
-  - Both bash and PowerShell implementations should be parallel and consistent
----
-
-## 2026-01-29 - PS-001
-- What was implemented:
-  - Created scripts/ralph/ralph-once.sh - single iteration runner for ralph
-  - Display functions: show_banner(), show_status() with Unicode box-drawing
-  - invoke_claude_code() function that runs Claude Code with prompt.md
-  - TTY detection for proper output handling (tee to stderr when available)
-  - Completion signal detection for <promise>COMPLETE</promise>
-  - Progress comparison before/after iteration to show if progress was made
-  - Sources ralph-utils.sh for shared utilities (colors, PRD functions)
-- Files changed:
-  - scripts/ralph/ralph-once.sh (created, ~209 lines)
-- **Learnings for future iterations:**
-  - Use `[[ -t 2 ]]` to detect if stderr is a TTY for conditional output handling
-  - `tee /dev/tty` fails in non-TTY environments; use `tee /dev/stderr` instead
-  - Match PowerShell script structure: banner → status → claude execution → results
-  - Single iteration scripts don't need instance directories or locking (no multi-instance)
----
-
-## 2026-01-29 - PS-002
-- What was implemented:
-  - Created scripts/ralph/ralph-parallel.sh - parallel instance launcher for ralph
-  - Commands: start, stop, kill, status, dashboard, help
-  - Start command with -c COUNT and -m MAX_ITERATIONS options
-  - Uses bash background processes (&) for parallel execution
-  - Stores job PIDs in instances/running-jobs.json
-  - Stop sends SIGTERM, kill sends SIGKILL to processes
-  - Status shows running instances, active locks, and PRD progress
-  - Dashboard command launches ralph-dashboard.sh
-  - Respects RALPH_MAX_INSTANCES env var (default: 8)
-  - CPU cores / 2 as default instance count via nproc or sysctl
-- Files changed:
-  - scripts/ralph/ralph-parallel.sh (created, ~500 lines)
-- **Learnings for future iterations:**
-  - Use `nproc` on Linux, `sysctl -n hw.ncpu` on macOS for CPU count
-  - Use `is_process_running()` with `kill -0` to check if PID is alive
-  - `pgrep -f "pattern"` finds processes by command line pattern
-  - Store job metadata as JSON for tracking PIDs, start times, log files
-  - Match PowerShell's -Count/-MaxIterations with bash -c/--count and -m/--max-iterations
----
-
-## 2026-01-29 - PS-003
-- What was implemented:
-  - Added get_ralph_global_link_name() to ralph-utils.sh - returns {project-name}-{instance-id}
-  - Added register_ralph_global_instance() to ralph-utils.sh - creates symlink in global registry
-  - Added unregister_ralph_global_instance() to ralph-utils.sh - removes symlink from global registry
-  - Added corresponding functions to ralph.sh (which doesn't source ralph-utils.sh)
-  - Updated ralph.sh init_instance() to call register_ralph_global_instance()
-  - cleanup_on_exit() already calls unregister_ralph_global_instance()
-  - Functions respect RALPH_GLOBAL_DISABLE=1 environment variable
-- Files changed:
-  - scripts/ralph/ralph-utils.sh (added 3 global registry instance functions)
-  - scripts/ralph/ralph.sh (added register_ralph_global_instance, updated init_instance)
-- **Learnings for future iterations:**
-  - On Windows/MSYS, `ln -s` may create directory copies instead of symlinks
-  - Use `rm -rf` instead of `rm -f` when removing links for Windows compatibility
-  - ralph.sh has its own copy of global registry functions (doesn't source ralph-utils.sh)
-  - Instance ID changes each time script is sourced (due to timestamp component)
----
-
-## 2026-01-29 - PS-004
-- What was implemented:
-  - Added Get-RalphGlobalLinkName function to RalphUtils.psm1 - returns {project-name}-{instance-id}
-  - Added Register-RalphGlobalInstance function - creates junction (Windows) or symlink (Unix)
-  - Added Unregister-RalphGlobalInstance function - removes link from global registry
-  - Exported new functions in Export-ModuleMember
-  - Updated ralph.ps1 to call Register-RalphGlobalInstance after New-RalphInstanceDirectory
-  - Updated Invoke-RalphCleanup to call Unregister-RalphGlobalInstance during shutdown
-- Files changed:
-  - scripts/ralph/RalphUtils.psm1 (added 3 global registry instance functions, updated cleanup)
-  - scripts/ralph/ralph.ps1 (added Register-RalphGlobalInstance call in Main)
-- **Learnings for future iterations:**
-  - Use New-Item -ItemType Junction on Windows (doesn't require admin privileges)
-  - Use New-Item -ItemType SymbolicLink on Unix
-  - $IsWindows automatic variable works in PowerShell 7+, use $env:OS for older versions
-  - PowerShell functions should have [CmdletBinding()] and [OutputType()] for discoverability
----
-
-## 2026-01-29 - PS-006
-- What was implemented:
-  - Audited ralph-dashboard.ps1 vs ralph-dashboard.sh for visual and behavioral parity
-  - Fixed frame width discrepancy: bash used FRAME_WIDTH=75 while PowerShell used 73
-  - Verified matching Unicode box-drawing characters (╔╗╚╝═║╠╣)
-  - Verified matching color coding for states (working/merging=green, claiming/starting=cyan, idle=yellow, completed=blue, terminated/max_iterations=gray, dead=red)
-  - Verified matching keyboard shortcuts (q=quit, r=refresh, l=locks, c=cleanup)
-  - Verified matching refresh interval handling (default 2s, 100ms polling)
-  - Verified matching progress bar rendering (█ filled, ░ empty)
-- Files changed:
-  - scripts/ralph/ralph-dashboard.sh (changed FRAME_WIDTH from 75 to 73)
-- **Learnings for future iterations:**
-  - Frame widths must match exactly for visual parity across platforms
-  - PowerShell uses 73-character frame width for dashboard TUI
-  - Both scripts use same Unicode progress bar characters: U+2588 (█) and U+2591 (░)
-  - Interactive TUI apps use 100ms polling intervals for responsive keyboard input
----
-
-## 2026-01-29 - PS-007
-- What was implemented:
-  - Audited ralph-locks.ps1 vs ralph-locks.sh for behavioral parity
-  - Fixed invoke_release() to not exit 1 on failed release (matches PowerShell)
-  - Fixed invoke_release_all() to use process substitution for accurate counter
-  - Fixed invoke_cleanup() to use process substitution for accurate counter
-- Files changed:
-  - scripts/ralph/ralph-locks.sh (3 fixes)
-- Verified matching behavior:
-  - Same commands: status, release, release-all, cleanup
-  - Same age formatting (Ns, Nm, Nh)
-  - Same stale lock threshold (2 hours / 7200s, RALPH_LOCK_TIMEOUT env var)
-  - Same dead owner detection (heartbeat > 300s, not in terminal state)
-- **Learnings for future iterations:**
-  - Bash pipe to while-read creates subshell; counter increments lost in parent scope
-  - Use process substitution `< <(cmd)` instead of `cmd | while` to preserve variable scope
-  - PowerShell Invoke-Release doesn't exit 1 on failure, just prints error message
-  - Both scripts use same JSON field names (storyId, owner, age, isDead, isStale)
----
-
-## 2026-01-29 - PS-008
-- What was implemented:
-  - Audited ralph-status.ps1 vs ralph-status.sh for visual and behavioral parity
-  - Fixed header row color: bash now uses white color (matching PowerShell White)
-  - Fixed branch name color: bash now uses white color (matching PowerShell White)
-  - Verified matching progress bar rendering (30-char width, brackets included)
-  - Verified matching column widths: ID=8, Priority=8, Status=10, Title=40
-  - Verified matching color coding: green=complete, yellow=pending, gray=separator
-  - Verified incomplete stories sorted by priority in both scripts
-- Files changed:
-  - scripts/ralph/ralph-status.sh (2 color fixes)
-- **Learnings for future iterations:**
-  - PowerShell uses explicit White color where bash used default/no color
-  - write_colored() function supports "white" color in ralph-utils.sh
-  - Both scripts use identical column widths (8+8+10+40+6=72 total)
-  - Progress bar has brackets embedded in render_progress_bar(), not added separately
+  - The Ralph block detection uses marker comment "# Ralph functions" and ends at next non-Ralph comment or blank line
+  - Get-SourceSkillsPath was also updated to check local skills directory first (scripts/ralph/skills)
+  - All Pester tests passed (133 total including 24 new tests)
 ---
