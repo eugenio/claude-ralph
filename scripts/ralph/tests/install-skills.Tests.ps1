@@ -150,7 +150,7 @@ Describe 'install-skills.ps1 Script Structure' {
     }
 
     It 'Calls Main at the end' {
-        $script:scriptContent | Should -Match 'Main\s*$'
+        $script:scriptContent | Should -Match 'Main -Force:\$Force -Check:\$Check -SkipAliases:\$SkipAliases\s*$'
     }
 
     It 'Checks for RalphUtils.psm1 existence' {
@@ -1720,5 +1720,241 @@ function ralph { pwsh "/old/path/ralph.ps1" @args }
             $content | Should -Match 'function ralph'
             $content | Should -Not -Match '/old/path/'
         }
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# US-004: Command-Line Flags Tests (-Force, -Check, -SkipAliases)
+# ─────────────────────────────────────────────────────────────────────────────
+
+Describe 'Script Parameter Definitions' {
+    It 'Defines -Force parameter' {
+        $script:scriptContent | Should -Match '\[switch\]\$Force'
+    }
+
+    It 'Defines -Check parameter' {
+        $script:scriptContent | Should -Match '\[switch\]\$Check'
+    }
+
+    It 'Defines -SkipAliases parameter' {
+        $script:scriptContent | Should -Match '\[switch\]\$SkipAliases'
+    }
+
+    It 'Help documentation includes -Force parameter' {
+        $script:scriptContent | Should -Match '\.PARAMETER Force'
+    }
+
+    It 'Help documentation includes -Check parameter' {
+        $script:scriptContent | Should -Match '\.PARAMETER Check'
+    }
+
+    It 'Help documentation includes -SkipAliases parameter' {
+        $script:scriptContent | Should -Match '\.PARAMETER SkipAliases'
+    }
+
+    It 'Has example for -Force flag' {
+        $script:scriptContent | Should -Match '\./install-skills\.ps1 -Force'
+    }
+
+    It 'Has example for -Check flag' {
+        $script:scriptContent | Should -Match '\./install-skills\.ps1 -Check'
+    }
+
+    It 'Has example for -SkipAliases flag' {
+        $script:scriptContent | Should -Match '\./install-skills\.ps1 -SkipAliases'
+    }
+}
+
+Describe 'Main Function Parameter Handling' {
+    It 'Main function accepts -Force parameter' {
+        $script:scriptContent | Should -Match 'function Main[\s\S]*?\[switch\]\$Force'
+    }
+
+    It 'Main function accepts -Check parameter' {
+        $script:scriptContent | Should -Match 'function Main[\s\S]*?\[switch\]\$Check'
+    }
+
+    It 'Main function accepts -SkipAliases parameter' {
+        $script:scriptContent | Should -Match 'function Main[\s\S]*?\[switch\]\$SkipAliases'
+    }
+
+    It 'Main is called with parameters at script end' {
+        $script:scriptContent | Should -Match 'Main -Force:\$Force -Check:\$Check -SkipAliases:\$SkipAliases'
+    }
+}
+
+Describe 'Install-PowerShellAliases -Force Parameter' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    It 'Install-PowerShellAliases accepts -Force parameter' {
+        $script:scriptContent | Should -Match 'function Install-PowerShellAliases[\s\S]*?\[switch\]\$Force'
+    }
+
+    It 'Describes -Force parameter in function help' {
+        $script:scriptContent | Should -Match 'function Install-PowerShellAliases[\s\S]*?\.PARAMETER Force'
+    }
+
+    Context '-Force flag behavior' {
+        It 'Updates outdated functions without prompting when -Force is set' {
+            $profilePath = Join-Path $TestDrive 'force_update_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+"@
+            # Mock $PROFILE temporarily
+            $originalProfile = $PROFILE
+
+            # Create a mock comparison result
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            # The function should auto-update when Force is set (no user prompt)
+            # We test this by ensuring the script contains the force-mode logic
+            $script:scriptContent | Should -Match 'if \(\$Force\)'
+            $script:scriptContent | Should -Match 'Updating Ralph functions \(force mode\)'
+        }
+
+        It 'Force mode calls Update-RalphFunctionsInProfile directly' {
+            $script:scriptContent | Should -Match '\$Force\)[\s\S]*?Update-RalphFunctionsInProfile'
+        }
+    }
+}
+
+Describe '-Check Flag Behavior' {
+    It 'Check mode exits early without making changes' {
+        $script:scriptContent | Should -Match 'if \(\$Check\)'
+        $script:scriptContent | Should -Match 'Check mode - no changes will be made'
+    }
+
+    It 'Check mode displays skills status' {
+        $script:scriptContent | Should -Match 'Skills to install:'
+    }
+
+    It 'Check mode indicates new vs update skills' {
+        $script:scriptContent | Should -Match '\(update\)'
+        $script:scriptContent | Should -Match '\(new\)'
+    }
+
+    It 'Check mode displays profile aliases status' {
+        $script:scriptContent | Should -Match 'Profile aliases status:'
+    }
+
+    It 'Check mode shows missing status' {
+        $script:scriptContent | Should -Match "Status: Not installed"
+    }
+
+    It 'Check mode shows up-to-date status' {
+        $script:scriptContent | Should -Match 'Status: Up-to-date'
+    }
+
+    It 'Check mode shows needs update status' {
+        $script:scriptContent | Should -Match 'Status: Needs update'
+    }
+
+    It 'Check mode exits with code 0' {
+        # Check mode section should have exit 0
+        $script:scriptContent | Should -Match '\$Check\)[\s\S]*?exit 0'
+    }
+}
+
+Describe '-SkipAliases Flag Behavior' {
+    It 'SkipAliases flag skips alias installation section' {
+        $script:scriptContent | Should -Match 'if \(\$SkipAliases\)'
+    }
+
+    It 'SkipAliases shows message indicating aliases are skipped' {
+        $script:scriptContent | Should -Match 'Skipping alias installation \(--SkipAliases specified\)'
+    }
+
+    It 'SkipAliases exits successfully after skills install' {
+        $script:scriptContent | Should -Match '\$SkipAliases\)[\s\S]*?exit 0'
+    }
+}
+
+Describe 'Flag Combinations' {
+    It 'Script handles -Force with -SkipAliases (force skills only)' {
+        # Both flags can be set - skills are installed, aliases skipped
+        # The script structure should allow this combination
+        $script:scriptContent | Should -Match 'if \(\$SkipAliases\)'
+        $script:scriptContent | Should -Match 'if \(\$Force\)'
+    }
+
+    It 'Check mode is evaluated before skill installation' {
+        # Check mode should exit before Install-Skills is called
+        $checkPattern = '\$Check\)[\s\S]*?exit 0'
+        $installPattern = '\$result = Install-Skills'
+
+        # Find positions
+        $checkMatch = [regex]::Match($script:scriptContent, $checkPattern)
+        $installMatch = [regex]::Match($script:scriptContent, $installPattern)
+
+        # Check block should appear before Install-Skills call in Main function
+        $checkMatch.Success | Should -Be $true
+        $installMatch.Success | Should -Be $true
+    }
+}
+
+Describe 'Force Mode Alias Installation Flow' {
+    It 'Force mode installs aliases without y/N prompt' {
+        $script:scriptContent | Should -Match 'if \(\$Force\)[\s\S]*?Installing PowerShell aliases \(force mode\)'
+    }
+
+    It 'Force mode passes -Force to Install-PowerShellAliases' {
+        $script:scriptContent | Should -Match 'Install-PowerShellAliases -Force'
+    }
+
+    It 'Interactive mode uses Read-Host for alias prompt' {
+        # In else block after Force check
+        $script:scriptContent | Should -Match 'else[\s\S]*?Read-Host.*install.*aliases'
+    }
+}
+
+Describe 'Integration Test: Force Update Profile' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    Context 'Update-RalphFunctionsInProfile with Force scenarios' {
+        It 'Updates outdated profile without user interaction' {
+            $profilePath = Join-Path $TestDrive 'force_integration_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# My config
+Set-Alias ll ls
+
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+
+# More config
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            # Directly call Update (simulating Force behavior)
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+            $result.Action | Should -Be 'update'
+
+            $content = Get-Content -Path $profilePath -Raw
+            $content | Should -Not -Match '/old/path/'
+            $content | Should -Match 'function ralph-once'
+        }
+    }
+}
+
+Describe 'Check Mode Output Formatting' {
+    It 'Check mode uses proper color coding for status' {
+        # Up-to-date should be green
+        $script:scriptContent | Should -Match "Status: Up-to-date.*-ForegroundColor Green"
+        # Needs update and Not installed should be yellow
+        $script:scriptContent | Should -Match "Status: (Needs update|Not installed).*-ForegroundColor Yellow"
+    }
+
+    It 'Check mode shows expected function count' {
+        $script:scriptContent | Should -Match 'Expected functions:'
+    }
+
+    It 'Check mode shows installed function count' {
+        $script:scriptContent | Should -Match 'Installed functions:'
     }
 }

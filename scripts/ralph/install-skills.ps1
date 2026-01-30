@@ -11,9 +11,37 @@
 
     Existing skills are updated (overwritten) when this script runs.
 
+.PARAMETER Force
+    Updates the PowerShell profile without prompting for confirmation.
+    When used with existing Ralph functions, automatically updates them in-place.
+
+.PARAMETER Check
+    Only reports the current status without making any changes.
+    Shows which skills would be installed and whether profile aliases need updating.
+
+.PARAMETER SkipAliases
+    Skips the PowerShell alias installation entirely.
+    Only installs skills without prompting for or installing profile functions.
+
 .EXAMPLE
     ./install-skills.ps1
     Installs all skills from scripts/ralph/skills/ to ~/.claude/skills/
+
+.EXAMPLE
+    ./install-skills.ps1 -Force
+    Installs skills and updates profile aliases without prompting.
+
+.EXAMPLE
+    ./install-skills.ps1 -Check
+    Shows what would be installed without making changes.
+
+.EXAMPLE
+    ./install-skills.ps1 -SkipAliases
+    Installs skills only, skipping alias installation.
+
+.EXAMPLE
+    ./install-skills.ps1 -Force -SkipAliases
+    Force installs skills only (no prompts, no aliases).
 
 .NOTES
     Requires:
@@ -25,7 +53,16 @@
 #>
 
 [CmdletBinding()]
-param()
+param(
+    [Parameter()]
+    [switch]$Force,
+
+    [Parameter()]
+    [switch]$Check,
+
+    [Parameter()]
+    [switch]$SkipAliases
+)
 
 # Import the shared utilities module
 $modulePath = Join-Path $PSScriptRoot 'RalphUtils.psm1'
@@ -427,12 +464,18 @@ function Install-PowerShellAliases {
         - Skip: Leave profile unchanged
         - Update: Replace only the Ralph functions block in-place
         - Reinstall: Remove old block and append fresh one
+    .PARAMETER Force
+        When specified, updates the profile without prompting for confirmation.
+        For outdated functions, automatically performs an in-place update.
     .OUTPUTS
         Hashtable with Success, ProfilePath, Message, and comparison details.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
-    param()
+    param(
+        [Parameter()]
+        [switch]$Force
+    )
 
     $profilePath = $PROFILE
 
@@ -487,7 +530,15 @@ function Install-PowerShellAliases {
         }
     }
 
-    # Functions exist but are outdated - prompt user
+    # Functions exist but are outdated
+    # If -Force flag is set, automatically update without prompting
+    if ($Force) {
+        Write-Host ''
+        Write-Host 'Updating Ralph functions (force mode)...' -ForegroundColor Yellow
+        return Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+    }
+
+    # Interactive mode - prompt user
     Write-Host ''
     Write-Host 'Existing Ralph functions detected in profile:' -ForegroundColor Yellow
     Write-Host "  Installed: $($comparison.InstalledCount) functions" -ForegroundColor Cyan
@@ -880,9 +931,24 @@ function Main {
     <#
     .SYNOPSIS
         Main execution function.
+    .PARAMETER Force
+        Updates the PowerShell profile without prompting for confirmation.
+    .PARAMETER Check
+        Only reports the current status without making any changes.
+    .PARAMETER SkipAliases
+        Skips the PowerShell alias installation entirely.
     #>
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter()]
+        [switch]$Force,
+
+        [Parameter()]
+        [switch]$Check,
+
+        [Parameter()]
+        [switch]$SkipAliases
+    )
 
     Show-Banner
     Write-Host ''
@@ -894,7 +960,69 @@ function Main {
     Write-ColoredOutput "Destination: $destPath" -Color Cyan
     Write-Host ''
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Check mode - report status only
+    # ─────────────────────────────────────────────────────────────────────────
+    if ($Check) {
+        Write-Host 'Check mode - no changes will be made' -ForegroundColor Yellow
+        Write-Host ''
+
+        # Check skills status
+        if (Test-Path $sourcePath) {
+            $skillDirs = Get-ChildItem -Path $sourcePath -Directory -ErrorAction SilentlyContinue
+            if ($skillDirs -and $skillDirs.Count -gt 0) {
+                Write-Host 'Skills to install:' -ForegroundColor Cyan
+                foreach ($skill in $skillDirs) {
+                    $skillDest = Join-Path $destPath $skill.Name
+                    $status = if (Test-Path $skillDest) { '(update)' } else { '(new)' }
+                    Write-Host "  - $($skill.Name) $status" -ForegroundColor Green
+                }
+            }
+            else {
+                Write-ColoredOutput 'No skills found in source directory.' -Color Yellow
+            }
+        }
+        else {
+            Write-ColoredOutput "Source skills directory not found: $sourcePath" -Color Red
+        }
+
+        Write-Host ''
+
+        # Check aliases status
+        Write-Host 'Profile aliases status:' -ForegroundColor Cyan
+        $comparison = Compare-RalphFunctions -ProfilePath $PROFILE
+
+        switch ($comparison.Status) {
+            'missing' {
+                Write-Host '  Status: Not installed' -ForegroundColor Yellow
+                Write-Host "  Expected functions: $($comparison.ExpectedCount)" -ForegroundColor Gray
+            }
+            'up-to-date' {
+                Write-Host '  Status: Up-to-date' -ForegroundColor Green
+                Write-Host "  Installed functions: $($comparison.InstalledCount)" -ForegroundColor Gray
+            }
+            'outdated' {
+                Write-Host '  Status: Needs update' -ForegroundColor Yellow
+                Write-Host "  Installed: $($comparison.InstalledCount) | Expected: $($comparison.ExpectedCount)" -ForegroundColor Gray
+                if ($comparison.MissingFunctions.Count -gt 0) {
+                    Write-Host '  Missing:' -ForegroundColor Yellow
+                    foreach ($func in $comparison.MissingFunctions) {
+                        Write-Host "    - $func" -ForegroundColor Red
+                    }
+                }
+                if ($comparison.PathOutdated) {
+                    Write-Host "  Path outdated: $($comparison.InstalledPath) -> $($comparison.ExpectedPath)" -ForegroundColor Yellow
+                }
+            }
+        }
+
+        Write-Host ''
+        exit 0
+    }
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Install skills
+    # ─────────────────────────────────────────────────────────────────────────
     $result = Install-Skills
 
     if ($result.Success) {
@@ -927,14 +1055,25 @@ function Main {
     }
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Optional alias installation
+    # Skip aliases if requested
+    # ─────────────────────────────────────────────────────────────────────────
+    if ($SkipAliases) {
+        Write-Host ''
+        Write-ColoredOutput 'Skipping alias installation (--SkipAliases specified).' -Color Gray
+        Write-Host ''
+        exit 0
+    }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Alias installation (force or interactive)
     # ─────────────────────────────────────────────────────────────────────────
     Write-Host ''
     Write-Host ([string]::new([char]0x2500, 55)) -ForegroundColor Blue
-    $response = Read-Host 'Would you like to install PowerShell aliases for ralph tools? (y/N)'
 
-    if ($response -match '^[yY]') {
-        $aliasResult = Install-PowerShellAliases
+    if ($Force) {
+        # Force mode - install/update without prompting
+        Write-Host 'Installing PowerShell aliases (force mode)...' -ForegroundColor Yellow
+        $aliasResult = Install-PowerShellAliases -Force
         if ($aliasResult.Success) {
             $action = if ($aliasResult.Action) { $aliasResult.Action } else { '' }
             Show-AliasInstructions -ProfilePath $aliasResult.ProfilePath -AlreadyExists $aliasResult.AlreadyExists -Action $action
@@ -944,7 +1083,22 @@ function Main {
         }
     }
     else {
-        Write-ColoredOutput 'Skipping alias installation.' -Color Gray
+        # Interactive mode - prompt user
+        $response = Read-Host 'Would you like to install PowerShell aliases for ralph tools? (y/N)'
+
+        if ($response -match '^[yY]') {
+            $aliasResult = Install-PowerShellAliases
+            if ($aliasResult.Success) {
+                $action = if ($aliasResult.Action) { $aliasResult.Action } else { '' }
+                Show-AliasInstructions -ProfilePath $aliasResult.ProfilePath -AlreadyExists $aliasResult.AlreadyExists -Action $action
+            }
+            else {
+                Write-ColoredOutput "Failed to install aliases: $($aliasResult.Message)" -Color Red
+            }
+        }
+        else {
+            Write-ColoredOutput 'Skipping alias installation.' -Color Gray
+        }
     }
 
     Write-Host ''
@@ -952,4 +1106,4 @@ function Main {
 }
 
 # Run main
-Main
+Main -Force:$Force -Check:$Check -SkipAliases:$SkipAliases
