@@ -728,11 +728,11 @@ main() {
     fi
 
     # Setup terminal
-    local cursor_visible=true
+    _CURSOR_VISIBLE=true
 
     cleanup() {
         # Restore cursor
-        if [[ "$cursor_visible" == "false" ]]; then
+        if [[ "${_CURSOR_VISIBLE:-true}" == "false" ]]; then
             tput cnorm 2>/dev/null || true
         fi
         clear
@@ -742,7 +742,7 @@ main() {
 
     # Hide cursor
     tput civis 2>/dev/null || true
-    cursor_visible=false
+    _CURSOR_VISIBLE=false
 
     # Main loop
     while true; do
