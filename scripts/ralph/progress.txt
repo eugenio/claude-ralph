@@ -3,7 +3,27 @@
 - Profile parsing should handle both Unix (\n) and Windows (\r\n) line endings using `$content -split "\`r?\`n"`
 - Tests in scripts/ralph/tests/ use Pester 5.x with BeforeAll blocks for test setup
 - When comparing profile functions, use Get-ExpectedRalphFunctions, Get-ProfileRalphFunctions, Compare-RalphFunctions
+- To preserve line endings when writing files, use `[System.IO.File]::WriteAllText()` instead of `Set-Content`
+- Normalize heredoc strings from CRLF to LF before line ending conversion: `$block -replace "\`r\`n", "\`n"`
 
+---
+
+## 2026-01-30 - US-003: Implement in-place profile update with backup
+- What was implemented:
+  - Added Backup-ProfileFile function to create .bak backups before any profile modifications
+  - Update-RalphFunctionsInProfile now creates backup and preserves original line endings (CRLF/LF)
+  - Reinstall-RalphFunctionsInProfile also creates backup before reinstalling
+  - Both functions normalize line endings from Get-ExpectedRalphFunctions before applying target format
+  - Use [System.IO.File]::WriteAllText() for precise line ending control (PowerShell's Set-Content may alter them)
+  - Result hashtables now include BackupPath property
+- Files changed:
+  - scripts/ralph/install-skills.ps1 (added Backup-ProfileFile, updated Update/Reinstall functions with backup and line ending preservation)
+  - scripts/ralph/tests/install-skills.Tests.ps1 (added 15 new tests for backup and line ending preservation)
+- **Learnings for future iterations:**
+  - PowerShell heredocs (@"..."@) on Windows create strings with CRLF, must normalize before line ending replacement
+  - Set-Content on Windows may convert line endings; use [System.IO.File]::WriteAllText for exact control
+  - Detect original line ending with: `$lineEnding = if ($content -match "\`r\`n") { "\`r\`n" } else { "\`n" }`
+  - All 154 Pester tests passed
 ---
 
 ## 2026-01-30 - US-002: Prompt user for update action
