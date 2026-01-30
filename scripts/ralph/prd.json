@@ -1,0 +1,85 @@
+{
+  "projectName": "install-skills-profile-update",
+  "description": "Allow install-skills.ps1 to update existing PowerShell profile functions instead of skipping them",
+  "branchName": "main",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Detect outdated Ralph functions in profile",
+      "description": "When Ralph functions already exist in the PowerShell profile, compare them against the current version to determine if they need updating.",
+      "acceptanceCriteria": [
+        "Parse existing Ralph functions block from profile",
+        "Compare function definitions with current expected definitions",
+        "Identify missing functions (e.g., ralph-parallel, ralph-dashboard)",
+        "Identify functions with outdated paths",
+        "Return a status indicating: up-to-date, outdated, or missing functions"
+      ],
+      "priority": 1,
+      "passes": true,
+      "claimedBy": "eugen-FRAMEWORK16-UGE-13436-1769778382"
+    },
+    {
+      "id": "US-002",
+      "title": "Prompt user for update action",
+      "description": "When existing functions are detected, prompt the user with options: skip, update, or remove and reinstall.",
+      "acceptanceCriteria": [
+        "Show current vs expected function count",
+        "Display which functions are missing or outdated",
+        "Offer options: (S)kip, (U)pdate, (R)einstall",
+        "Skip leaves profile unchanged",
+        "Update modifies only the Ralph functions block in-place",
+        "Reinstall removes old block and appends fresh one"
+      ],
+      "priority": 2,
+      "passes": true,
+      "claimedBy": null
+    },
+    {
+      "id": "US-003",
+      "title": "Implement in-place profile update",
+      "description": "Replace the existing Ralph functions block in the profile with the updated version while preserving other profile content.",
+      "acceptanceCriteria": [
+        "Find start marker '# Ralph functions'",
+        "Find end of block (next comment marker or end of consecutive function lines)",
+        "Replace only the Ralph block, preserving everything else",
+        "Handle edge cases: block at start, middle, or end of file",
+        "Preserve file encoding and line endings",
+        "Create backup before modification (.bak file)"
+      ],
+      "priority": 3,
+      "passes": true,
+      "claimedBy": null
+    },
+    {
+      "id": "US-004",
+      "title": "Add --force and --check flags",
+      "description": "Add command-line parameters to support non-interactive usage.",
+      "acceptanceCriteria": [
+        "-Force flag updates profile without prompting",
+        "-Check flag only reports status without making changes",
+        "-SkipAliases flag skips alias installation entirely",
+        "Flags work correctly in combination",
+        "Help text documents all flags"
+      ],
+      "priority": 4,
+      "passes": true,
+      "claimedBy": null
+    },
+    {
+      "id": "US-005",
+      "title": "Update bash install-skills.sh for parity",
+      "description": "Apply the same update logic to the bash version of the installer.",
+      "acceptanceCriteria": [
+        "Detect existing Ralph functions in .bashrc/.zshrc",
+        "Compare against current expected definitions",
+        "Prompt for update action (skip/update/reinstall)",
+        "Implement in-place update preserving other content",
+        "Add --force and --check flags",
+        "Both scripts have feature parity"
+      ],
+      "priority": 5,
+      "passes": true,
+      "claimedBy": "eugen-FRAMEWORK16-UGE-19964-1769778738"
+    }
+  ]
+}

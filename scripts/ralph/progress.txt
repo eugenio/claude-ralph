@@ -6,6 +6,33 @@
 - To preserve line endings when writing files, use `[System.IO.File]::WriteAllText()` instead of `Set-Content`
 - Normalize heredoc strings from CRLF to LF before line ending conversion: `$block -replace "\`r\`n", "\`n"`
 - Pass script-level parameters to Main function using splatting syntax: `Main -Force:$Force -Check:$Check -SkipAliases:$SkipAliases`
+- Bash function parsing: Use pipe `|` as delimiter for multi-value output instead of quoted strings (read doesn't parse quotes)
+- When bash functions need to return values and set arrays, call populate function directly (not in subshell) to preserve array values
+
+---
+
+## 2026-01-30 - US-005: Update bash install-skills.sh for parity with PowerShell
+- What was implemented:
+  - Added `populate_expected_ralph_functions` and `get_expected_ralph_functions` for expected function definitions
+  - Added `get_profile_ralph_functions` to parse existing Ralph block from .bashrc/.zshrc
+  - Added `compare_ralph_functions` to determine status (up-to-date/outdated/missing)
+  - Added `backup_profile_file` to create .bak backups before modifications
+  - Added `update_ralph_functions_in_profile` for in-place block replacement
+  - Added `reinstall_ralph_functions_in_profile` to remove old block and append fresh
+  - User prompt shows installed vs expected count, missing functions, outdated paths
+  - Options: (S)kip, (U)pdate, (R)einstall
+  - `--force` flag for non-interactive updates
+  - `--check` flag for status-only mode
+  - `--skip-aliases` flag to skip alias installation
+  - All 5 functions supported: ralph, ralph-once, ralph-status, ralph-parallel, ralph-dashboard
+  - Feature parity with PowerShell version achieved
+- Files changed:
+  - scripts/ralph/install-skills.sh (613 insertions, 34 deletions)
+- **Learnings for future iterations:**
+  - Bash command substitution `$()` runs in a subshell - array changes don't propagate back to parent
+  - Split array population (`populate_*`) from output generation (`get_*`) when both are needed
+  - Use pipe delimiter for multi-field output parsing instead of quoted strings
+  - `IFS='|' read -r field1 field2 field3 field4 <<< "$result"` for reliable parsing
 
 ---
 
