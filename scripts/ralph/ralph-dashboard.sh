@@ -72,25 +72,55 @@ get_frame_height() {
 }
 
 # calculate_section_limits()
-# Calculates max rows for each section based on terminal height
+# Calculates max rows for each section based on terminal height and actual content
 # Sets global variables: MAX_PROJECTS, MAX_INSTANCES, MAX_LOCKS
 calculate_section_limits() {
     local term_height
     term_height=$(get_frame_height)
     local available=$((term_height - RESERVED_LINES))
 
-    # Minimum 1 row per section
+    # Minimum 3 rows total (1 per section)
     [[ "$available" -lt 3 ]] && available=3
 
-    # Distribution ratio: PROJECTS:INSTANCES:LOCKS = 2:5:2
-    MAX_PROJECTS=$((available * 2 / 9))
-    MAX_INSTANCES=$((available * 5 / 9))
-    MAX_LOCKS=$((available - MAX_PROJECTS - MAX_INSTANCES))
+    # Get actual content counts
+    local projects_status instances_json locks_json
+    local project_count instance_count lock_count
 
-    # Enforce minimums (use || true to prevent set -e from exiting)
-    [[ "$MAX_PROJECTS" -lt 1 ]] && MAX_PROJECTS=1 || true
-    [[ "$MAX_INSTANCES" -lt 1 ]] && MAX_INSTANCES=1 || true
-    [[ "$MAX_LOCKS" -lt 1 ]] && MAX_LOCKS=1 || true
+    projects_status=$(get_all_projects_prd_status 2>/dev/null || echo "[]")
+    project_count=$(echo "$projects_status" | jq 'length' 2>/dev/null || echo 0)
+    [[ -z "$project_count" || "$project_count" == "null" ]] && project_count=0
+
+    instances_json=$(get_ralph_global_instances "all" 2>/dev/null || echo "[]")
+    instance_count=$(echo "$instances_json" | jq 'length' 2>/dev/null || echo 0)
+    [[ -z "$instance_count" || "$instance_count" == "null" ]] && instance_count=0
+
+    locks_json=$(get_all_projects_locks 2>/dev/null || echo "[]")
+    lock_count=$(echo "$locks_json" | jq 'length' 2>/dev/null || echo 0)
+    [[ -z "$lock_count" || "$lock_count" == "null" ]] && lock_count=0
+
+    # Ensure at least 1 for display purposes (empty message)
+    [[ "$project_count" -lt 1 ]] && project_count=1
+    [[ "$instance_count" -lt 1 ]] && instance_count=1
+    [[ "$lock_count" -lt 1 ]] && lock_count=1
+
+    local total_needed=$((project_count + instance_count + lock_count))
+
+    if [[ "$total_needed" -le "$available" ]]; then
+        # All content fits - show everything
+        MAX_PROJECTS=$project_count
+        MAX_INSTANCES=$instance_count
+        MAX_LOCKS=$lock_count
+    else
+        # Distribute proportionally based on content
+        MAX_PROJECTS=$((available * project_count / total_needed))
+        MAX_INSTANCES=$((available * instance_count / total_needed))
+        MAX_LOCKS=$((available - MAX_PROJECTS - MAX_INSTANCES))
+
+        # Enforce minimums (use || true to prevent set -e from exiting)
+        [[ "$MAX_PROJECTS" -lt 1 ]] && MAX_PROJECTS=1 || true
+        [[ "$MAX_INSTANCES" -lt 1 ]] && MAX_INSTANCES=1 || true
+        [[ "$MAX_LOCKS" -lt 1 ]] && MAX_LOCKS=1 || true
+    fi
 }
 
 # Unicode box drawing characters

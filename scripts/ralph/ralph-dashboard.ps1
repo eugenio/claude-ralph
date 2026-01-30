@@ -71,13 +71,35 @@ function Update-SectionLimits {
     $termHeight = Get-FrameHeight
     $available = $termHeight - $script:ReservedLines
 
-    # Minimum 1 row per section
+    # Minimum 3 rows total (1 per section)
     if ($available -lt 3) { $available = 3 }
 
-    # Distribution ratio: PROJECTS:INSTANCES:LOCKS = 2:5:2
-    $script:MaxProjects = [Math]::Max(1, [int]($available * 2 / 9))
-    $script:MaxInstances = [Math]::Max(1, [int]($available * 5 / 9))
-    $script:MaxLocks = [Math]::Max(1, $available - $script:MaxProjects - $script:MaxInstances)
+    # Get actual content counts
+    $projectsStatus = Get-AllProjectsPrdStatus
+    $projectCount = @($projectsStatus).Count
+    if ($projectCount -lt 1) { $projectCount = 1 }
+
+    $instances = Get-RalphGlobalInstances -IncludeDead
+    $instanceCount = @($instances).Count
+    if ($instanceCount -lt 1) { $instanceCount = 1 }
+
+    $locks = Get-AllProjectsLocks
+    $lockCount = @($locks).Count
+    if ($lockCount -lt 1) { $lockCount = 1 }
+
+    $totalNeeded = $projectCount + $instanceCount + $lockCount
+
+    if ($totalNeeded -le $available) {
+        # All content fits - show everything
+        $script:MaxProjects = $projectCount
+        $script:MaxInstances = $instanceCount
+        $script:MaxLocks = $lockCount
+    } else {
+        # Distribute proportionally based on content
+        $script:MaxProjects = [Math]::Max(1, [int]($available * $projectCount / $totalNeeded))
+        $script:MaxInstances = [Math]::Max(1, [int]($available * $instanceCount / $totalNeeded))
+        $script:MaxLocks = [Math]::Max(1, $available - $script:MaxProjects - $script:MaxInstances)
+    }
 }
 
 function Get-ProgressBar {
