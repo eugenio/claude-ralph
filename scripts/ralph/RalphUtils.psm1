@@ -2265,9 +2265,13 @@ function Get-ProjectPrdStatus {
     $prdFile = $null
     $standardPath = Join-Path $ProjectRoot 'scripts' 'ralph' 'prd.json'
     $claudePath = Join-Path $ProjectRoot '.claude' 'ralph' 'prd.json'
+    $projectPath = Join-Path $ProjectRoot 'project' 'prd.json'
+    $tasksPath = Join-Path $ProjectRoot 'tasks' 'prd.json'
     $altPath = Join-Path $ProjectRoot 'prd.json'
     if (Test-Path $standardPath) { $prdFile = $standardPath }
     elseif (Test-Path $claudePath) { $prdFile = $claudePath }
+    elseif (Test-Path $projectPath) { $prdFile = $projectPath }
+    elseif (Test-Path $tasksPath) { $prdFile = $tasksPath }
     elseif (Test-Path $altPath) { $prdFile = $altPath }
     if (-not $prdFile) { return @{ Total = 0; Complete = 0 } }
     try {

@@ -261,6 +261,10 @@ get_project_prd_status() {
         prd_file="$project_root/scripts/ralph/prd.json"
     elif [[ -f "$project_root/.claude/ralph/prd.json" ]]; then
         prd_file="$project_root/.claude/ralph/prd.json"
+    elif [[ -f "$project_root/project/prd.json" ]]; then
+        prd_file="$project_root/project/prd.json"
+    elif [[ -f "$project_root/tasks/prd.json" ]]; then
+        prd_file="$project_root/tasks/prd.json"
     elif [[ -f "$project_root/prd.json" ]]; then
         prd_file="$project_root/prd.json"
     fi
