@@ -5,7 +5,29 @@
 - When comparing profile functions, use Get-ExpectedRalphFunctions, Get-ProfileRalphFunctions, Compare-RalphFunctions
 - To preserve line endings when writing files, use `[System.IO.File]::WriteAllText()` instead of `Set-Content`
 - Normalize heredoc strings from CRLF to LF before line ending conversion: `$block -replace "\`r\`n", "\`n"`
+- Pass script-level parameters to Main function using splatting syntax: `Main -Force:$Force -Check:$Check -SkipAliases:$SkipAliases`
 
+---
+
+## 2026-01-30 - US-004: Add --force, --check, and --skip-aliases flags
+- What was implemented:
+  - Added -Force, -Check, and -SkipAliases parameters to install-skills.ps1
+  - -Force: Updates profile without prompting, automatically performs in-place update for outdated functions
+  - -Check: Reports status without making changes (shows skills to install and profile alias status)
+  - -SkipAliases: Skips alias installation entirely, only installs skills
+  - Updated Install-PowerShellAliases to accept -Force parameter
+  - Updated Main function to handle all three flags with proper flow control
+  - Flags work correctly in combination (e.g., -Force -SkipAliases)
+  - Help text with .PARAMETER and .EXAMPLE documentation for all flags
+- Files changed:
+  - scripts/ralph/install-skills.ps1 (added parameters, updated Install-PowerShellAliases and Main functions)
+  - scripts/ralph/tests/install-skills.Tests.ps1 (added 37 new tests for US-004 functionality)
+- **Learnings for future iterations:**
+  - PowerShell switch parameters can be passed to functions using colon syntax: `-Force:$Force`
+  - Check mode should exit early (before Install-Skills) to avoid any side effects
+  - SkipAliases is evaluated after skills install but before alias prompt
+  - Force mode bypasses both the y/N prompt and the S/U/R prompt
+  - All 191 Pester tests passed
 ---
 
 ## 2026-01-30 - US-003: Implement in-place profile update with backup
