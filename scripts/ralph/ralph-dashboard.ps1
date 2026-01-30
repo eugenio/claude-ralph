@@ -208,10 +208,10 @@ function Render-Instances {
     # Fixed columns: STATE(12), ITER(7), RUNTIME(12) = 31 + 5 spaces = 36
     $fixedWidth = 36
     $available = $script:FrameWidth - $fixedWidth
-    # Distribute to: PROJECT, STORY, BRANCH (ratio 3:2:4)
-    $colProject = [Math]::Max(10, [int]($available * 3 / 9))
-    $colStory = [Math]::Max(8, [int]($available * 2 / 9))
-    $colBranch = [Math]::Max(10, $available - $colProject - $colStory)
+    # Distribute to: PROJECT, STORY, BRANCH (ratio 2:2:5 - prioritize BRANCH)
+    $colProject = [Math]::Max(8, [int]($available * 2 / 9))
+    $colStory = [Math]::Max(6, [int]($available * 2 / 9))
+    $colBranch = [Math]::Max(15, $available - $colProject - $colStory)
 
     # Header row
     $headerLine = " {0,-$colProject} {1,-$colStory} {2,-12} {3,-7} {4,-12} {5,-$colBranch}" -f 'PROJECT', 'STORY', 'STATE', 'ITER', 'RUNTIME', 'BRANCH'

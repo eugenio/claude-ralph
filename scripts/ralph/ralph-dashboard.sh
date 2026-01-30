@@ -462,14 +462,14 @@ render_instances() {
     # Fixed columns: STATE(12), ITER(7), RUNTIME(12) = 31 + 5 spaces = 36
     local fixed_width=36
     local available=$((FRAME_WIDTH - fixed_width))
-    # Distribute to: PROJECT, STORY, BRANCH (ratio 3:2:4)
-    local col_project=$((available * 3 / 9))
+    # Distribute to: PROJECT, STORY, BRANCH (ratio 2:2:5 - prioritize BRANCH)
+    local col_project=$((available * 2 / 9))
     local col_story=$((available * 2 / 9))
     local col_branch=$((available - col_project - col_story))
     # Minimums
-    [[ "$col_project" -lt 10 ]] && col_project=10
-    [[ "$col_story" -lt 8 ]] && col_story=8
-    [[ "$col_branch" -lt 10 ]] && col_branch=10
+    [[ "$col_project" -lt 8 ]] && col_project=8
+    [[ "$col_story" -lt 6 ]] && col_story=6
+    [[ "$col_branch" -lt 15 ]] && col_branch=15
 
     # Header row
     local header_line
