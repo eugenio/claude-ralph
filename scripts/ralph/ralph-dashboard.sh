@@ -42,6 +42,15 @@ source "$SCRIPT_DIR/ralph-utils.sh"
 
 REFRESH_INTERVAL=2
 MIN_FRAME_WIDTH=60
+MIN_FRAME_HEIGHT=20
+
+# Reserved lines for fixed UI elements
+# Header: top border(1) + title(1) + separator(1) + separator after projects(1) = 4
+# Instances: header row(1) + divider(1) = 2
+# Locks: separator(1) + header(1) = 2
+# Footer: separator(1) + help(1) + time(1) + bottom border(1) = 4
+# Total fixed overhead = 12 lines
+RESERVED_LINES=12
 
 # get_frame_width()
 # Returns the current terminal width minus 2 for borders
@@ -51,6 +60,37 @@ get_frame_width() {
     local width=$((term_width - 2))
     [[ "$width" -lt "$MIN_FRAME_WIDTH" ]] && width="$MIN_FRAME_WIDTH"
     echo "$width"
+}
+
+# get_frame_height()
+# Returns the current terminal height
+get_frame_height() {
+    local term_height
+    term_height=$(tput lines 2>/dev/null || echo 24)
+    [[ "$term_height" -lt "$MIN_FRAME_HEIGHT" ]] && term_height="$MIN_FRAME_HEIGHT"
+    echo "$term_height"
+}
+
+# calculate_section_limits()
+# Calculates max rows for each section based on terminal height
+# Sets global variables: MAX_PROJECTS, MAX_INSTANCES, MAX_LOCKS
+calculate_section_limits() {
+    local term_height
+    term_height=$(get_frame_height)
+    local available=$((term_height - RESERVED_LINES))
+
+    # Minimum 1 row per section
+    [[ "$available" -lt 3 ]] && available=3
+
+    # Distribution ratio: PROJECTS:INSTANCES:LOCKS = 2:5:2
+    MAX_PROJECTS=$((available * 2 / 9))
+    MAX_INSTANCES=$((available * 5 / 9))
+    MAX_LOCKS=$((available - MAX_PROJECTS - MAX_INSTANCES))
+
+    # Enforce minimums
+    [[ "$MAX_PROJECTS" -lt 1 ]] && MAX_PROJECTS=1
+    [[ "$MAX_INSTANCES" -lt 1 ]] && MAX_INSTANCES=1
+    [[ "$MAX_LOCKS" -lt 1 ]] && MAX_LOCKS=1
 }
 
 # Unicode box drawing characters
@@ -346,8 +386,8 @@ render_header() {
         printf "%*s" "$empty_padding" ""
         write_colored blue "${BOX_V}"
     else
-        # Show each project's progress
-        echo "$projects_status" | jq -c '.[]' | head -4 | while IFS= read -r project; do
+        # Show each project's progress (limited by MAX_PROJECTS)
+        echo "$projects_status" | jq -c '.[]' | head -"$MAX_PROJECTS" | while IFS= read -r project; do
             [[ -z "$project" ]] && continue
             local name total complete progress_bar progress_text progress_padding
             name=$(echo "$project" | jq -r '.name')
@@ -362,8 +402,8 @@ render_header() {
             printf "%s%*s" "$progress_text" "$progress_padding" ""
             write_colored blue "${BOX_V}"
         done
-        if [[ "$project_count" -gt 4 ]]; then
-            local more_count=$((project_count - 4))
+        if [[ "$project_count" -gt "$MAX_PROJECTS" ]]; then
+            local more_count=$((project_count - MAX_PROJECTS))
             local more_text="  ... and $more_count more projects"
             local more_padding=$((FRAME_WIDTH - ${#more_text}))
             write_colored blue "${BOX_V}" "-n"
@@ -436,7 +476,8 @@ render_instances() {
         printf "%*s" "$empty_padding" ""
         write_colored blue "${BOX_V}"
     else
-        echo "$instances_json" | jq -c '.[]' | while IFS= read -r instance; do
+        # Limit instances to MAX_INSTANCES
+        echo "$instances_json" | jq -c '.[]' | head -"$MAX_INSTANCES" | while IFS= read -r instance; do
             [[ -z "$instance" ]] && continue
 
             local is_dead state instance_id current_story iteration max_iterations
@@ -498,6 +539,17 @@ render_instances() {
             [[ "$line_padding" -gt 0 ]] && printf "%*s" "$line_padding" ""
             write_colored blue "${BOX_V}"
         done
+
+        # Show "... and N more" if there are more instances
+        if [[ "$instance_count" -gt "$MAX_INSTANCES" ]]; then
+            local more_count=$((instance_count - MAX_INSTANCES))
+            local more_line="  ... and $more_count more instances"
+            local more_padding=$((FRAME_WIDTH - ${#more_line}))
+            write_colored blue "${BOX_V}" "-n"
+            write_colored gray "$more_line" "-n"
+            printf "%*s" "$more_padding" ""
+            write_colored blue "${BOX_V}"
+        fi
     fi
 }
 
@@ -543,7 +595,7 @@ render_locks() {
         [[ "$lk_owner" -lt 10 ]] && lk_owner=10
         [[ "$lk_duration" -lt 10 ]] && lk_duration=10
 
-        echo "$locks_json" | jq -c '.[]' | head -5 | while IFS= read -r lock; do
+        echo "$locks_json" | jq -c '.[]' | head -"$MAX_LOCKS" | while IFS= read -r lock; do
             [[ -z "$lock" ]] && continue
             local story_id owner age is_stale project age_str color lock_line lock_line_padding
             story_id=$(echo "$lock" | jq -r '.storyId // ""')
@@ -565,8 +617,8 @@ render_locks() {
             write_colored blue "${BOX_V}"
         done
 
-        if [[ "$lock_count" -gt 5 ]]; then
-            local more_count=$((lock_count - 5))
+        if [[ "$lock_count" -gt "$MAX_LOCKS" ]]; then
+            local more_count=$((lock_count - MAX_LOCKS))
             local more_line="    ... and $more_count more"
             local more_padding=$((FRAME_WIDTH - ${#more_line}))
             write_colored blue "${BOX_V}" "-n"
@@ -609,8 +661,9 @@ render_footer() {
 # Renders the complete dashboard
 #
 render_dashboard() {
-    # Update frame width dynamically based on terminal size
+    # Update frame dimensions dynamically based on terminal size
     FRAME_WIDTH=$(get_frame_width)
+    calculate_section_limits
     clear
     render_header
     render_instances

@@ -34,9 +34,23 @@ if (-not (Test-Path $modulePath)) {
 }
 Import-Module $modulePath -Force
 
-# Dynamic frame width
+# Dynamic frame dimensions
 $script:MinFrameWidth = 60
+$script:MinFrameHeight = 20
 $script:FrameWidth = 73
+
+# Reserved lines for fixed UI elements
+# Header: top border(1) + title(1) + separator(1) + separator after projects(1) = 4
+# Instances: header row(1) + divider(1) = 2
+# Locks: separator(1) + header(1) = 2
+# Footer: separator(1) + help(1) + time(1) + bottom border(1) = 4
+# Total fixed overhead = 12 lines
+$script:ReservedLines = 12
+
+# Section limits (calculated dynamically)
+$script:MaxProjects = 4
+$script:MaxInstances = 10
+$script:MaxLocks = 5
 
 function Get-FrameWidth {
     $termWidth = [Console]::WindowWidth
@@ -44,6 +58,26 @@ function Get-FrameWidth {
     $width = $termWidth - 2
     if ($width -lt $script:MinFrameWidth) { $width = $script:MinFrameWidth }
     return $width
+}
+
+function Get-FrameHeight {
+    $termHeight = [Console]::WindowHeight
+    if ($termHeight -lt 1) { $termHeight = 24 }
+    if ($termHeight -lt $script:MinFrameHeight) { $termHeight = $script:MinFrameHeight }
+    return $termHeight
+}
+
+function Update-SectionLimits {
+    $termHeight = Get-FrameHeight
+    $available = $termHeight - $script:ReservedLines
+
+    # Minimum 1 row per section
+    if ($available -lt 3) { $available = 3 }
+
+    # Distribution ratio: PROJECTS:INSTANCES:LOCKS = 2:5:2
+    $script:MaxProjects = [Math]::Max(1, [int]($available * 2 / 9))
+    $script:MaxInstances = [Math]::Max(1, [int]($available * 5 / 9))
+    $script:MaxLocks = [Math]::Max(1, $available - $script:MaxProjects - $script:MaxInstances)
 }
 
 function Get-ProgressBar {
@@ -118,9 +152,9 @@ function Render-Header {
         Write-Host (' ' * $padding) -NoNewline
         Write-Host ([char]0x2551) -ForegroundColor Blue
     } else {
-        # Show each project's progress (max 4)
+        # Show each project's progress (limited by MaxProjects)
         $shown = 0
-        foreach ($proj in $projectsStatus | Select-Object -First 4) {
+        foreach ($proj in $projectsStatus | Select-Object -First $script:MaxProjects) {
             $name = $proj.Name
             if ($name.Length -gt 12) { $name = $name.Substring(0, 9) + '...' }
             $bar = Get-ProgressBar -Complete $proj.Complete -Total $proj.Total -Width 20
@@ -132,8 +166,8 @@ function Render-Header {
             Write-Host ([char]0x2551) -ForegroundColor Blue
             $shown++
         }
-        if ($projectsStatus.Count -gt 4) {
-            $moreCount = $projectsStatus.Count - 4
+        if ($projectsStatus.Count -gt $script:MaxProjects) {
+            $moreCount = $projectsStatus.Count - $script:MaxProjects
             $moreText = "  ... and $moreCount more projects"
             $padding = $script:FrameWidth - $moreText.Length
             Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
@@ -187,7 +221,9 @@ function Render-Instances {
         Write-Host ([char]0x2551) -ForegroundColor Blue
     }
     else {
-        foreach ($instance in $instances) {
+        # Limit instances to MaxInstances
+        $shownInstances = $instances | Select-Object -First $script:MaxInstances
+        foreach ($instance in $shownInstances) {
             $state = if ($instance.isDead) { 'dead' } else { $instance.state }
             $color = Get-StateColor -State $state
 
@@ -226,6 +262,17 @@ function Render-Instances {
             Write-Host (' ' * $linePad) -NoNewline
             Write-Host ([char]0x2551) -ForegroundColor Blue
         }
+
+        # Show "... and N more" if there are more instances
+        if ($instances.Count -gt $script:MaxInstances) {
+            $moreCount = $instances.Count - $script:MaxInstances
+            $moreText = "  ... and $moreCount more instances"
+            $morePad = [Math]::Max(0, $script:FrameWidth - $moreText.Length)
+            Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
+            Write-Host $moreText -NoNewline -ForegroundColor Gray
+            Write-Host (' ' * $morePad) -NoNewline
+            Write-Host ([char]0x2551) -ForegroundColor Blue
+        }
     }
 }
 
@@ -258,7 +305,7 @@ function Render-Locks {
         $lkOwner = [Math]::Max(10, [int]($lockAvailable * 3 / 9))
         $lkDuration = [Math]::Max(10, $lockAvailable - $lkProject - $lkStory - $lkOwner)
 
-        foreach ($lock in $locks | Select-Object -First 5) {
+        foreach ($lock in $locks | Select-Object -First $script:MaxLocks) {
             $ageStr = Format-Duration -Seconds $lock.Age
             $ownerStr = if ($lock.Owner.Length -gt $lkOwner) { $lock.Owner.Substring(0, $lkOwner - 3) + '...' } else { $lock.Owner }
             $projStr = if ($lock.Project.Length -gt $lkProject) { $lock.Project.Substring(0, $lkProject - 3) + '...' } else { $lock.Project }
@@ -271,8 +318,8 @@ function Render-Locks {
             Write-Host (' ' * [Math]::Max(0, $padding)) -NoNewline
             Write-Host ([char]0x2551) -ForegroundColor Blue
         }
-        if ($locks.Count -gt 5) {
-            $more = "    ... and $($locks.Count - 5) more"
+        if ($locks.Count -gt $script:MaxLocks) {
+            $more = "    ... and $($locks.Count - $script:MaxLocks) more"
             $padding = $script:FrameWidth - $more.Length
             Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
             Write-Host $more -NoNewline -ForegroundColor Gray
@@ -301,8 +348,9 @@ function Render-Footer {
 }
 
 function Render-Dashboard {
-    # Update frame width dynamically based on terminal size
+    # Update frame dimensions dynamically based on terminal size
     $script:FrameWidth = Get-FrameWidth
+    Update-SectionLimits
     Clear-Host
     Render-Header
     Render-Instances
