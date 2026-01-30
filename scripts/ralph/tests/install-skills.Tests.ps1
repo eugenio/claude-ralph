@@ -1116,3 +1116,326 @@ Describe 'Show-AliasInstructions Function' {
         }
     }
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# US-002: Profile Update Detection and User Prompt Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+Describe 'Get-ExpectedRalphFunctions Function' {
+    BeforeAll {
+        # Dot-source the script to get the functions
+        . $script:installScript
+    }
+
+    It 'Script defines Get-ExpectedRalphFunctions function' {
+        $script:scriptContent | Should -Match 'function Get-ExpectedRalphFunctions'
+    }
+
+    It 'Returns hashtable with FunctionBlock property' {
+        $result = Get-ExpectedRalphFunctions
+        $result | Should -BeOfType [hashtable]
+        $result.FunctionBlock | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Returns hashtable with FunctionNames array' {
+        $result = Get-ExpectedRalphFunctions
+        # FunctionNames could be string or array depending on count, but should have items
+        @($result.FunctionNames).Count | Should -BeGreaterOrEqual 1
+    }
+
+    It 'Returns hashtable with RalphDir path' {
+        $result = Get-ExpectedRalphFunctions
+        $result.RalphDir | Should -Not -BeNullOrEmpty
+    }
+
+    It 'FunctionBlock contains Ralph functions marker' {
+        $result = Get-ExpectedRalphFunctions
+        $result.FunctionBlock | Should -Match '# Ralph functions'
+    }
+
+    It 'FunctionNames includes core functions' {
+        $result = Get-ExpectedRalphFunctions
+        $result.FunctionNames | Should -Contain 'ralph'
+        $result.FunctionNames | Should -Contain 'ralph-once'
+        $result.FunctionNames | Should -Contain 'ralph-status'
+    }
+}
+
+Describe 'Get-ProfileRalphFunctions Function' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    It 'Script defines Get-ProfileRalphFunctions function' {
+        $script:scriptContent | Should -Match 'function Get-ProfileRalphFunctions'
+    }
+
+    Context 'When profile does not exist' {
+        It 'Returns Exists = $false for non-existent profile' {
+            $nonExistentPath = Join-Path $TestDrive 'nonexistent_profile.ps1'
+            $result = Get-ProfileRalphFunctions -ProfilePath $nonExistentPath
+
+            $result.Exists | Should -Be $false
+            $result.FunctionNames.Count | Should -Be 0
+        }
+    }
+
+    Context 'When profile has no Ralph functions' {
+        It 'Returns Exists = $false for profile without Ralph section' {
+            $profilePath = Join-Path $TestDrive 'no_ralph_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# My profile
+Set-Alias ll Get-ChildItem
+"@
+            $result = Get-ProfileRalphFunctions -ProfilePath $profilePath
+
+            $result.Exists | Should -Be $false
+        }
+    }
+
+    Context 'When profile has Ralph functions' {
+        It 'Detects Ralph functions block' {
+            $profilePath = Join-Path $TestDrive 'ralph_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# My profile
+Set-Alias ll Get-ChildItem
+
+# Ralph functions
+function ralph { pwsh "/test/scripts/ralph/ralph.ps1" @args }
+function ralph-once { pwsh "/test/scripts/ralph/ralph-once.ps1" @args }
+"@
+            $result = Get-ProfileRalphFunctions -ProfilePath $profilePath
+
+            $result.Exists | Should -Be $true
+            $result.FunctionNames.Count | Should -Be 2
+            $result.FunctionNames | Should -Contain 'ralph'
+            $result.FunctionNames | Should -Contain 'ralph-once'
+        }
+
+        It 'Extracts RalphDir from function definitions' {
+            $profilePath = Join-Path $TestDrive 'ralph_dir_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/custom/path/to/ralph/ralph.ps1" @args }
+"@
+            $result = Get-ProfileRalphFunctions -ProfilePath $profilePath
+
+            $result.RalphDir | Should -Be '/custom/path/to/ralph'
+        }
+
+        It 'Returns correct StartLine and EndLine' {
+            $profilePath = Join-Path $TestDrive 'line_test_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Line 0 - comment
+Set-Alias ll ls
+# Ralph functions
+function ralph { pwsh "/test/ralph.ps1" @args }
+function ralph-once { pwsh "/test/ralph-once.ps1" @args }
+# Other stuff
+"@
+            $result = Get-ProfileRalphFunctions -ProfilePath $profilePath
+
+            $result.StartLine | Should -Be 2  # "# Ralph functions" is at index 2
+            $result.EndLine | Should -Be 4    # Last function line is at index 4
+        }
+    }
+}
+
+Describe 'Compare-RalphFunctions Function' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    It 'Script defines Compare-RalphFunctions function' {
+        $script:scriptContent | Should -Match 'function Compare-RalphFunctions'
+    }
+
+    Context 'When profile has no Ralph functions' {
+        It 'Returns status = missing' {
+            $profilePath = Join-Path $TestDrive 'empty_compare_profile.ps1'
+            Set-Content -Path $profilePath -Value '# Empty profile'
+
+            $result = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result.Status | Should -Be 'missing'
+            $result.InstalledCount | Should -Be 0
+            $result.MissingFunctions.Count | Should -BeGreaterThan 0
+        }
+    }
+
+    Context 'When profile has outdated functions' {
+        It 'Returns status = outdated when functions are missing' {
+            $profilePath = Join-Path $TestDrive 'outdated_compare_profile.ps1'
+            $expected = Get-ExpectedRalphFunctions
+            # Only add one function when multiple are expected
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "$($expected.RalphDir)/ralph.ps1" @args }
+"@
+            $result = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result.Status | Should -Be 'outdated'
+            $result.NeedsUpdate | Should -Be $true
+            $result.MissingFunctions.Count | Should -BeGreaterThan 0
+        }
+
+        It 'Returns PathOutdated = $true when path differs' {
+            $profilePath = Join-Path $TestDrive 'path_outdated_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/old/wrong/path/ralph.ps1" @args }
+function ralph-once { pwsh "/old/wrong/path/ralph-once.ps1" @args }
+function ralph-status { pwsh "/old/wrong/path/ralph-status.ps1" @args }
+"@
+            $result = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result.PathOutdated | Should -Be $true
+            $result.InstalledPath | Should -Be '/old/wrong/path'
+        }
+    }
+
+    Context 'When profile is up-to-date' {
+        It 'Returns status = up-to-date when all functions present with correct path' {
+            $profilePath = Join-Path $TestDrive 'uptodate_compare_profile.ps1'
+            $expected = Get-ExpectedRalphFunctions
+
+            # Write all expected functions
+            Set-Content -Path $profilePath -Value $expected.FunctionBlock
+
+            $result = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result.Status | Should -Be 'up-to-date'
+            $result.NeedsUpdate | Should -Be $false
+            $result.MissingFunctions.Count | Should -Be 0
+        }
+    }
+}
+
+Describe 'Update-RalphFunctionsInProfile Function' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    It 'Script defines Update-RalphFunctionsInProfile function' {
+        $script:scriptContent | Should -Match 'function Update-RalphFunctionsInProfile'
+    }
+
+    Context 'In-place update' {
+        It 'Preserves content before and after Ralph block' {
+            $profilePath = Join-Path $TestDrive 'update_preserve_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Before content
+Set-Alias ll ls
+
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+
+# After content
+Set-PSReadLineOption -EditMode Emacs
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+            $result.Action | Should -Be 'update'
+
+            $content = Get-Content -Path $profilePath -Raw
+            $content | Should -Match '# Before content'
+            $content | Should -Match 'Set-Alias ll ls'
+            $content | Should -Match '# After content'
+            $content | Should -Match 'Set-PSReadLineOption'
+        }
+
+        It 'Replaces Ralph functions with expected functions' {
+            $profilePath = Join-Path $TestDrive 'update_replace_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result = Update-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $content = Get-Content -Path $profilePath -Raw
+            $content | Should -Not -Match '/old/path/'
+            $content | Should -Match 'function ralph-once'
+            $content | Should -Match 'function ralph-status'
+        }
+    }
+}
+
+Describe 'Reinstall-RalphFunctionsInProfile Function' {
+    BeforeAll {
+        . $script:installScript
+    }
+
+    It 'Script defines Reinstall-RalphFunctionsInProfile function' {
+        $script:scriptContent | Should -Match 'function Reinstall-RalphFunctionsInProfile'
+    }
+
+    Context 'Reinstall behavior' {
+        It 'Removes old block and appends new one at end' {
+            $profilePath = Join-Path $TestDrive 'reinstall_profile.ps1'
+            Set-Content -Path $profilePath -Value @"
+# Ralph functions
+function ralph { pwsh "/old/path/ralph.ps1" @args }
+
+# Other config
+Set-Alias ll ls
+"@
+            $comparison = Compare-RalphFunctions -ProfilePath $profilePath
+
+            $result = Reinstall-RalphFunctionsInProfile -ProfilePath $profilePath -Comparison $comparison
+
+            $result.Success | Should -Be $true
+            $result.Action | Should -Be 'reinstall'
+
+            $content = Get-Content -Path $profilePath -Raw
+            # Old path should be gone
+            $content | Should -Not -Match '/old/path/'
+            # Other config preserved
+            $content | Should -Match 'Set-Alias ll ls'
+            # New Ralph block at end (after other config)
+            $content | Should -Match '# Ralph functions'
+        }
+    }
+}
+
+Describe 'Install-PowerShellAliases User Prompt Options' {
+    It 'Script shows S/U/R options for outdated functions' {
+        $script:scriptContent | Should -Match '\(S\)kip'
+        $script:scriptContent | Should -Match '\(U\)pdate'
+        $script:scriptContent | Should -Match '\(R\)einstall'
+    }
+
+    It 'Script displays missing functions in prompt' {
+        $script:scriptContent | Should -Match 'Missing functions:'
+    }
+
+    It 'Script displays path outdated warning' {
+        $script:scriptContent | Should -Match 'Path is outdated:'
+    }
+
+    It 'Script handles S choice to skip' {
+        $script:scriptContent | Should -Match "'\^\[sS\]\$'"
+    }
+
+    It 'Script handles U choice to update' {
+        $script:scriptContent | Should -Match "'\^\[uU\]\$'"
+    }
+
+    It 'Script handles R choice to reinstall' {
+        $script:scriptContent | Should -Match "'\^\[rR\]\$'"
+    }
+}
+
+Describe 'Show-AliasInstructions Extended Commands' {
+    It 'Mentions ralph-parallel command' {
+        $script:scriptContent | Should -Match 'ralph-parallel\s+-\s+Run multiple ralph instances in parallel'
+    }
+
+    It 'Mentions ralph-dashboard command' {
+        $script:scriptContent | Should -Match 'ralph-dashboard\s+-\s+Monitor ralph instances'
+    }
+}
