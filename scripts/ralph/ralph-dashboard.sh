@@ -310,16 +310,44 @@ get_project_prd_status() {
 }
 
 # get_all_projects_prd_status()
-# Gets PRD status for all unique projects from global instances
+# Gets PRD status for all unique projects from global instances and registry
 get_all_projects_prd_status() {
     local instances_json project_roots local_root all_roots result
+    local global_dir="${RALPH_GLOBAL_DIR:-$HOME/.ralph/global}"
+
+    # Get project roots from active instances
     instances_json=$(get_ralph_global_instances "all" 2>/dev/null || echo "[]")
     project_roots=$(echo "$instances_json" | jq -r '.[].projectRoot // empty' | sort -u)
+
+    # Also extract project roots from global registry symlinks (even stale ones)
+    if [[ -d "$global_dir/instances" ]]; then
+        for link in "$global_dir/instances"/*; do
+            [[ -L "$link" ]] || continue
+            local target pr
+            target=$(readlink "$link" 2>/dev/null) || continue
+            # Extract project root by removing known instance path suffixes
+            # Order matters - try most specific patterns first
+            if [[ "$target" == */scripts/ralph/instances/* ]]; then
+                pr="${target%%/scripts/ralph/instances/*}"
+            elif [[ "$target" == */.claude/ralph/instances/* ]]; then
+                pr="${target%%/.claude/ralph/instances/*}"
+            elif [[ "$target" == */project/instances/* ]]; then
+                pr="${target%%/project/instances/*}"
+            elif [[ "$target" == */tasks/instances/* ]]; then
+                pr="${target%%/tasks/instances/*}"
+            else
+                # Fallback: just remove /instances/...
+                pr="${target%%/instances/*}"
+            fi
+            [[ -d "$pr" ]] && project_roots=$(printf "%s\n%s" "$project_roots" "$pr")
+        done
+    fi
+
     local_root=$(get_project_root 2>/dev/null || echo "")
     if [[ -n "$local_root" ]]; then
         all_roots=$(printf "%s\n%s" "$project_roots" "$local_root" | sort -u | grep -v '^$')
     else
-        all_roots="$project_roots"
+        all_roots=$(echo "$project_roots" | sort -u | grep -v '^$')
     fi
     result="[]"
     while IFS= read -r pr; do

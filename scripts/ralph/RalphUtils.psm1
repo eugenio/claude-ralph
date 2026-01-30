@@ -2294,6 +2294,31 @@ function Get-AllProjectsPrdStatus {
     param()
     $instances = Get-RalphGlobalInstances -IncludeDead
     $projectRoots = @($instances | ForEach-Object { $_.projectRoot } | Where-Object { $_ } | Sort-Object -Unique)
+
+    # Also extract project roots from global registry symlinks (even stale ones)
+    $globalDir = if ($env:RALPH_GLOBAL_DIR) { $env:RALPH_GLOBAL_DIR } else { Join-Path $HOME '.ralph' 'global' }
+    $instancesDir = Join-Path $globalDir 'instances'
+    if (Test-Path $instancesDir) {
+        Get-ChildItem -Path $instancesDir -ErrorAction SilentlyContinue | ForEach-Object {
+            $target = $null
+            if ($_.LinkType -eq 'SymbolicLink') {
+                $target = $_.Target
+            }
+            if ($target) {
+                # Extract project root by removing known instance path suffixes
+                $pr = $target
+                if ($target -match '^(.+)/scripts/ralph/instances/') { $pr = $Matches[1] }
+                elseif ($target -match '^(.+)/\.claude/ralph/instances/') { $pr = $Matches[1] }
+                elseif ($target -match '^(.+)/project/instances/') { $pr = $Matches[1] }
+                elseif ($target -match '^(.+)/tasks/instances/') { $pr = $Matches[1] }
+                elseif ($target -match '^(.+)/instances/') { $pr = $Matches[1] }
+                if ($pr -and (Test-Path $pr) -and $pr -notin $projectRoots) {
+                    $projectRoots += $pr
+                }
+            }
+        }
+    }
+
     # Include local project
     $localRoot = (Get-RalphPaths).ProjectRoot
     if ($localRoot -and $localRoot -notin $projectRoots) {
