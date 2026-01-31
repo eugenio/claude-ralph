@@ -134,7 +134,7 @@ function Show-Help {
     Write-Host '  ./ralph-parallel.ps1 Status'
     Write-Host ''
     Write-Host 'Environment Variables:' -ForegroundColor Yellow
-    Write-Host '  RALPH_MAX_INSTANCES  Maximum instances allowed (default: 8)'
+    Write-Host '  RALPH_MAX_INSTANCES  Maximum instances allowed (default: 16)'
     Write-Host '  RALPH_ITERATIONS     Default max iterations (default: 10)'
     Write-Host ''
 }
@@ -168,7 +168,7 @@ function Start-RalphInstances {
         }
     }
 
-    $maxInstances = [int]($env:RALPH_MAX_INSTANCES ?? 8)
+    $maxInstances = [int]($env:RALPH_MAX_INSTANCES ?? 16)
     if ($Count -gt $maxInstances) {
         Write-Host "Warning: Limiting to $maxInstances instances (RALPH_MAX_INSTANCES)" -ForegroundColor Yellow
         $Count = $maxInstances

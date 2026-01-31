@@ -23,7 +23,7 @@
 #   -m, --max-iterations  Max iterations per instance (default: 10)
 #
 # ENVIRONMENT:
-#   RALPH_MAX_INSTANCES   Maximum instances allowed (default: 8)
+#   RALPH_MAX_INSTANCES   Maximum instances allowed (default: 16)
 #   RALPH_ITERATIONS      Default max iterations (default: 10)
 #
 # EXAMPLES:
@@ -53,7 +53,7 @@ eval "$(get_ralph_paths)"
 # =============================================================================
 
 JOBS_FILE="$INSTANCES_DIR/running-jobs.json"
-MAX_INSTANCES="${RALPH_MAX_INSTANCES:-8}"
+MAX_INSTANCES="${RALPH_MAX_INSTANCES:-16}"
 DEFAULT_ITERATIONS="${RALPH_ITERATIONS:-10}"
 
 # =============================================================================
@@ -126,13 +126,15 @@ show_help() {
     write_colored yellow "Options:"
     echo "  -c, --count N        Number of instances (default: CPU cores / 2)"
     echo "  -m, --max-iterations Max iterations per instance (default: 10)"
+    echo "  -p, --prd PATH       Path to prd.json (for start and check commands)"
+    echo "  -r, --project PATH   Project root directory (for start command)"
     echo ""
     write_colored yellow "Check Options:"
-    echo "  -p, --prd PATH       Path to prd.json (default: local prd.json)"
     echo "  -q, --quiet          Quiet mode (exit code only: 0=complete, 1=incomplete)"
     echo ""
     write_colored yellow "Examples:"
     echo "  ./ralph-parallel.sh start -c 3"
+    echo "  ./ralph-parallel.sh start -c 3 -p /path/to/prd.json -r /path/to/project"
     echo "  ./ralph-parallel.sh check -p /path/to/prd.json"
     echo "  ./ralph-parallel.sh check -q && echo 'Complete!' || echo 'Incomplete'"
     echo "  ./ralph-parallel.sh stop"
@@ -140,7 +142,7 @@ show_help() {
     echo "  ./ralph-parallel.sh queue add -p /project/prd.json -r /project"
     echo ""
     write_colored yellow "Environment Variables:"
-    echo "  RALPH_MAX_INSTANCES  Maximum instances allowed (default: 8)"
+    echo "  RALPH_MAX_INSTANCES  Maximum instances allowed (default: 16)"
     echo "  RALPH_ITERATIONS     Default max iterations (default: 10)"
     echo ""
 }
@@ -148,6 +150,8 @@ show_help() {
 cmd_start() {
     local count="$1"
     local max_iterations="$2"
+    local prd_path="$3"
+    local project_root="$4"
 
     # Default count to CPU cores / 2
     if [[ -z "$count" || "$count" -le 0 ]]; then
@@ -171,6 +175,8 @@ cmd_start() {
     write_colored blue "$(printf '═%.0s' {1..55})"
     echo ""
     echo "Launching $count instances with $max_iterations iterations each..."
+    [[ -n "$prd_path" ]] && echo "PRD: $prd_path"
+    [[ -n "$project_root" ]] && echo "Project: $project_root"
     echo ""
 
     local ralph_script="$SCRIPT_DIR/ralph.sh"
@@ -190,9 +196,14 @@ cmd_start() {
             sleep 1
         fi
 
+        # Build command with optional PRD and project args
+        local ralph_args=("$max_iterations")
+        [[ -n "$prd_path" ]] && ralph_args+=("-p" "$prd_path")
+        [[ -n "$project_root" ]] && ralph_args+=("-r" "$project_root")
+
         # Launch in background
         local log_file="$INSTANCES_DIR/parallel-$i-$$.log"
-        "$ralph_script" "$max_iterations" > "$log_file" 2>&1 &
+        "$ralph_script" "${ralph_args[@]}" > "$log_file" 2>&1 &
         local pid=$!
 
         # Record job info
@@ -499,6 +510,8 @@ parse_args() {
     local command=""
     local count=0
     local max_iterations=0
+    local prd_path=""
+    local project_root=""
 
     local check_args=()
 
@@ -528,6 +541,14 @@ parse_args() {
                 max_iterations="$2"
                 shift 2
                 ;;
+            -p|--prd)
+                prd_path="$2"
+                shift 2
+                ;;
+            -r|--project)
+                project_root="$2"
+                shift 2
+                ;;
             -h|--help)
                 command="help"
                 shift
@@ -552,7 +573,7 @@ parse_args() {
     # Execute command
     case "$command" in
         start)
-            cmd_start "$count" "$max_iterations"
+            cmd_start "$count" "$max_iterations" "$prd_path" "$project_root"
             ;;
         stop)
             cmd_stop

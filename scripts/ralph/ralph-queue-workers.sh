@@ -102,12 +102,21 @@ cmd_start() {
         esac
     done
 
-    [[ -z "$count" || "$count" -le 0 ]] && count=$(get_default_worker_count)
     [[ -z "$max_iterations" || "$max_iterations" -le 0 ]] && max_iterations="$DEFAULT_ITERATIONS"
 
     # If parallel mode but no workers specified, use default
     if [[ "$use_parallel" -eq 1 && -z "$workers_per_prd" ]]; then
         workers_per_prd=$(get_default_worker_count)
+    fi
+
+    # Default count: if parallel mode and -c not specified, default to 1 queue processor
+    # (since you're running multiple workers per PRD, you usually want 1 processor per PRD)
+    if [[ -z "$count" || "$count" -le 0 ]]; then
+        if [[ "$use_parallel" -eq 1 ]]; then
+            count=1  # Default to 1 when using parallel mode
+        else
+            count=$(get_default_worker_count)
+        fi
     fi
 
     local pending_count

@@ -209,10 +209,10 @@ invoke_release_all() {
 }
 
 # invoke_cleanup()
-# Removes stale and dead-owner locks
+# Removes stale and dead-owner locks AND clears PRD claims
 #
 invoke_cleanup() {
-    write_colored "blue" "Cleaning up stale locks..."
+    write_colored "blue" "Cleaning up stale locks and PRD claims..."
 
     local locks_json
     locks_json=$(get_ralph_story_locks)
@@ -237,7 +237,8 @@ invoke_cleanup() {
 
         write_colored "yellow" "  Removing: $story_id - $reason"
 
-        if unlock_ralph_story "$story_id" "force"; then
+        # Use release_ralph_story_claim to also clear PRD claimedBy
+        if release_ralph_story_claim "$story_id"; then
             ((cleaned++)) || true
         fi
     done < <(echo "$locks_json" | jq -c '.[] | select(.isDead == true or .isStale == true)')
@@ -246,6 +247,32 @@ invoke_cleanup() {
         write_colored "green" "No stale locks found"
     else
         write_colored "green" "Cleaned up $cleaned stale locks"
+    fi
+
+    # Phase 2: Clean orphan PRD claims (claimedBy set but no corresponding lock)
+    write_colored "blue" "Checking for orphan PRD claims..."
+
+    eval "$(get_ralph_paths)"
+    if [[ -f "$PRD_FILE" ]]; then
+        local orphan_claims=0
+        local claimed_stories
+        claimed_stories=$(jq -r '.userStories[] | select(.claimedBy != null and .claimedBy != "") | .id' "$PRD_FILE" 2>/dev/null)
+
+        for story_id in $claimed_stories; do
+            local lock_dir="$LOCKS_DIR/${story_id}.lock"
+            if [[ ! -d "$lock_dir" ]]; then
+                write_colored "yellow" "  Clearing orphan claim: $story_id"
+                update_ralph_prd "Clear orphan claim $story_id" \
+                    ".userStories |= map(if .id == \"$story_id\" then .claimedBy = null else . end)" || true
+                ((orphan_claims++)) || true
+            fi
+        done
+
+        if [[ "$orphan_claims" -gt 0 ]]; then
+            write_colored "green" "Cleared $orphan_claims orphan PRD claims"
+        else
+            write_colored "green" "No orphan PRD claims found"
+        fi
     fi
 }
 

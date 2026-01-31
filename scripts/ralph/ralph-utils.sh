@@ -292,22 +292,37 @@ fi
 get_ralph_paths() {
     local ralph_dir="$RALPH_SCRIPT_DIR"
     local project_root
-    project_root="$(cd "$ralph_dir/../.." && pwd)"
+    project_root="${RALPH_PROJECT_ROOT:-}"
+    if [[ -z "$project_root" ]]; then
+        project_root="$(cd "$ralph_dir/../.." && pwd)"
+    fi
 
     # Use exported PRD_FILE if set, otherwise default to script dir
     local prd_file="${RALPH_PRD_FILE:-$ralph_dir/prd.json}"
+
+    # Determine work directory for locks/instances/progress
+    # If project root is explicitly set and has a ralph subdir, use it
+    local work_dir="$ralph_dir"
+    local proj_root="${RALPH_PROJECT_ROOT:-}"
+    if [[ -n "$proj_root" ]]; then
+        if [[ -d "$proj_root/ralph" ]]; then
+            work_dir="$proj_root/ralph"
+        elif [[ -d "$proj_root/scripts/ralph" ]]; then
+            work_dir="$proj_root/scripts/ralph"
+        fi
+    fi
 
     cat <<EOF
 RALPH_DIR="$ralph_dir"
 PROJECT_ROOT="$project_root"
 PRD_FILE="$prd_file"
-PROGRESS_FILE="$ralph_dir/progress.txt"
+PROGRESS_FILE="$work_dir/progress.txt"
 PROMPT_FILE="$ralph_dir/prompt.md"
-LOG_FILE="$ralph_dir/ralph.log"
-ARCHIVE_DIR="$ralph_dir/archive"
-LAST_BRANCH_FILE="$ralph_dir/.last-branch"
-INSTANCES_DIR="$ralph_dir/instances"
-LOCKS_DIR="$ralph_dir/locks"
+LOG_FILE="$work_dir/ralph.log"
+ARCHIVE_DIR="$work_dir/archive"
+LAST_BRANCH_FILE="$work_dir/.last-branch"
+INSTANCES_DIR="$work_dir/instances"
+LOCKS_DIR="$work_dir/locks"
 EOF
 }
 
@@ -861,8 +876,8 @@ lock_ralph_story() {
     timestamp=$(date +%s)
 
     # Write owner and timestamp
-    echo "$instance_id" > "$lock_dir/owner.txt"
-    echo "$timestamp" > "$lock_dir/timestamp.txt"
+    echo "$instance_id" > "$lock_dir/owner"
+    echo "$timestamp" > "$lock_dir/timestamp"
     echo "$$" > "$lock_dir/pid.txt"
 
     add_ralph_instance_log "Acquired lock for $story_id"
@@ -891,6 +906,8 @@ unlock_ralph_story() {
     local owner=""
     if [[ -f "$lock_dir/owner.txt" ]]; then
         owner=$(cat "$lock_dir/owner.txt" | tr -d '\n')
+    elif [[ -f "$lock_dir/owner" ]]; then
+        owner=$(cat "$lock_dir/owner" | tr -d '\n')
     fi
 
     local instance_id
