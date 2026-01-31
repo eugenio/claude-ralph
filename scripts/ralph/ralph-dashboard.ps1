@@ -186,6 +186,7 @@ function Get-StateColor {
         'merging' { return 'Green' }
         'claiming' { return 'Cyan' }
         'starting' { return 'Cyan' }
+        'waiting' { return 'Cyan' }
         'idle' { return 'Yellow' }
         'completed' { return 'Blue' }
         'terminated' { return 'Gray' }

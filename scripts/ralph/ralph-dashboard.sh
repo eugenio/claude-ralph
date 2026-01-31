@@ -251,7 +251,7 @@ get_state_color() {
         working|merging)
             echo "green"
             ;;
-        claiming|starting)
+        claiming|starting|waiting)
             echo "cyan"
             ;;
         idle)
