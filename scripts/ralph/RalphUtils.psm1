@@ -878,8 +878,8 @@ function Get-RalphGlobalInstances {
         $link = $_
         $instanceDir = $null
 
-        # Resolve symlink or directory
-        if ($link.LinkType -eq 'SymbolicLink') {
+        # Handle both SymbolicLink (Unix) and Junction (Windows)
+        if ($link.LinkType -in @('SymbolicLink', 'Junction')) {
             $instanceDir = $link.Target
         }
         elseif ($link.PSIsContainer) {
@@ -2301,7 +2301,8 @@ function Get-AllProjectsPrdStatus {
     if (Test-Path $instancesDir) {
         Get-ChildItem -Path $instancesDir -ErrorAction SilentlyContinue | ForEach-Object {
             $target = $null
-            if ($_.LinkType -eq 'SymbolicLink') {
+            # Handle both SymbolicLink (Unix) and Junction (Windows)
+            if ($_.LinkType -in @('SymbolicLink', 'Junction')) {
                 $target = $_.Target
             }
             if ($target) {
