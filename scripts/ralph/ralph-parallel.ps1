@@ -40,7 +40,15 @@ param(
     [int]$Count = 0,
 
     [Parameter()]
-    [int]$MaxIterations = 10
+    [int]$MaxIterations = 10,
+
+    [Parameter()]
+    [Alias('p')]
+    [string]$Prd,
+
+    [Parameter()]
+    [Alias('r')]
+    [string]$ProjectRoot
 )
 
 # Import module
@@ -99,8 +107,16 @@ function Show-Help {
     Write-Host '  Dashboard                             Open monitoring dashboard'
     Write-Host '  Help                                  Show this help'
     Write-Host ''
+    Write-Host 'Options:' -ForegroundColor Yellow
+    Write-Host '  -Count N, -c N           Number of instances (default: CPU cores / 2)'
+    Write-Host '  -MaxIterations M, -m M   Max iterations per instance (default: 10)'
+    Write-Host '  -Prd PATH, -p PATH       Path to prd.json file'
+    Write-Host '  -ProjectRoot PATH, -r PATH  Project root directory'
+    Write-Host ''
     Write-Host 'Examples:' -ForegroundColor Yellow
     Write-Host '  ./ralph-parallel.ps1 Start -Count 3'
+    Write-Host '  ./ralph-parallel.ps1 Start -Prd /path/to/prd.json -Count 2'
+    Write-Host '  ./ralph-parallel.ps1 Start -p /project/prd.json -r /project'
     Write-Host '  ./ralph-parallel.ps1 Stop'
     Write-Host '  ./ralph-parallel.ps1 Status'
     Write-Host ''
@@ -113,11 +129,29 @@ function Show-Help {
 function Start-RalphInstances {
     param(
         [int]$Count,
-        [int]$MaxIterations
+        [int]$MaxIterations,
+        [string]$PrdPath,
+        [string]$ProjectPath
     )
 
     if ($Count -le 0) {
         $Count = Get-DefaultCount
+    }
+
+    # Validate PRD path if provided
+    if ($PrdPath) {
+        if (-not (Test-Path $PrdPath -PathType Leaf)) {
+            Write-Host "Error: PRD file not found: $PrdPath" -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    # Validate project path if provided
+    if ($ProjectPath) {
+        if (-not (Test-Path $ProjectPath -PathType Container)) {
+            Write-Host "Error: Project directory not found: $ProjectPath" -ForegroundColor Red
+            exit 1
+        }
     }
 
     $maxInstances = [int]($env:RALPH_MAX_INSTANCES ?? 8)
@@ -132,6 +166,12 @@ function Start-RalphInstances {
     Write-Host ([string]::new([char]0x2550, 55)) -ForegroundColor Blue
     Write-Host ''
     Write-Host "Launching $Count instances with $MaxIterations iterations each..."
+    if ($PrdPath) {
+        Write-Host "PRD file: $PrdPath"
+    }
+    if ($ProjectPath) {
+        Write-Host "Project root: $ProjectPath"
+    }
     Write-Host ''
 
     $ralphScript = Join-Path $PSScriptRoot 'ralph.ps1'
@@ -146,9 +186,18 @@ function Start-RalphInstances {
         }
 
         $job = Start-Job -ScriptBlock {
-            param($script, $iterations)
-            & $script -MaxIterations $iterations
-        } -ArgumentList $ralphScript, $MaxIterations
+            param($script, $iterations, $prd, $project)
+            $params = @{
+                MaxIterations = $iterations
+            }
+            if ($prd) {
+                $params['Prd'] = $prd
+            }
+            if ($project) {
+                $params['ProjectRoot'] = $project
+            }
+            & $script @params
+        } -ArgumentList $ralphScript, $MaxIterations, $PrdPath, $ProjectPath
 
         $jobs += @{
             Id          = $job.Id
@@ -289,7 +338,7 @@ function Start-Dashboard {
 
 # Main
 switch ($Command) {
-    'Start' { Start-RalphInstances -Count $Count -MaxIterations $MaxIterations }
+    'Start' { Start-RalphInstances -Count $Count -MaxIterations $MaxIterations -PrdPath $Prd -ProjectPath $ProjectRoot }
     'Stop' { Stop-RalphInstances }
     'Kill' { Stop-RalphInstancesForce }
     'Status' { Show-Status }
