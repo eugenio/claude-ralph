@@ -198,6 +198,72 @@ Run multiple Ralph instances concurrently to parallelize story execution. Each i
 
 See [Multi-Instance Guide](docs/multi-instance.md) for full documentation.
 
+## Multi-Project Queue
+
+Queue PRDs from multiple projects and process them with workers. Workers automatically pick up the next queued PRD when they complete their current work.
+
+### Queue Management
+
+**Bash:**
+```bash
+# Add PRDs to the queue
+./scripts/ralph/ralph-queue.sh add -p /project1/prd.json -r /project1
+./scripts/ralph/ralph-queue.sh add -p /project2/prd.json -r /project2 --priority 1
+
+# Check if PRD is complete before adding
+./scripts/ralph/ralph-queue.sh check -p /path/to/prd.json
+./scripts/ralph/ralph-queue.sh check -p /path/to/prd.json -q  # Quiet mode (exits 0=complete, 1=incomplete)
+
+# List and manage queue
+./scripts/ralph/ralph-queue.sh list              # List all entries
+./scripts/ralph/ralph-queue.sh list -s pending   # Filter by status
+./scripts/ralph/ralph-queue.sh status            # Show summary
+./scripts/ralph/ralph-queue.sh remove -i <id>    # Remove an entry
+./scripts/ralph/ralph-queue.sh clear             # Clear completed entries
+
+# Start workers to process queue
+./scripts/ralph/ralph-queue.sh start -c 3 -m 10  # 3 workers, 10 max iterations each
+```
+
+**PowerShell:**
+```powershell
+# Add PRDs to the queue
+./scripts/ralph/ralph-queue.ps1 add -Prd /project1/prd.json -Project /project1
+./scripts/ralph/ralph-queue.ps1 add -Prd /project2/prd.json -Project /project2 -Priority 1
+
+# Check if PRD is complete before adding
+./scripts/ralph/ralph-queue.ps1 check -Prd /path/to/prd.json
+./scripts/ralph/ralph-queue.ps1 check -Prd /path/to/prd.json -Quiet  # Returns count
+
+# List and manage queue
+./scripts/ralph/ralph-queue.ps1 list
+./scripts/ralph/ralph-queue.ps1 list -Status pending
+./scripts/ralph/ralph-queue.ps1 status
+./scripts/ralph/ralph-queue.ps1 remove -Id <id>
+./scripts/ralph/ralph-queue.ps1 clear
+
+# Start workers to process queue
+./scripts/ralph/ralph-queue.ps1 start -Count 3 -MaxIterations 10
+```
+
+### Queue Workers
+
+For dedicated worker management:
+
+```bash
+# Bash
+./scripts/ralph/ralph-queue-workers.sh start -c 3 -m 10
+./scripts/ralph/ralph-queue-workers.sh status
+./scripts/ralph/ralph-queue-workers.sh stop
+```
+
+```powershell
+# PowerShell
+./scripts/ralph/ralph-queue-workers.ps1 start -Count 3 -MaxIterations 10
+./scripts/ralph/ralph-queue-workers.ps1 status
+./scripts/ralph/ralph-queue-workers.ps1 stop
+```
+
 ## Management Scripts
 
 ### Dashboard (`ralph-dashboard.sh` / `ralph-dashboard.ps1`)
@@ -540,6 +606,10 @@ claude
 ./scripts/ralph/ralph-status.sh
 cat scripts/ralph/prd.json | jq '.userStories[] | {id, title, passes}'
 
+# Check PRD completion before starting
+./scripts/ralph/ralph-parallel.sh check -p /path/to/prd.json
+./scripts/ralph/ralph-queue.sh check -p /path/to/prd.json -q  # Quiet mode (returns count)
+
 # Manage locks
 ./ralph-locks.sh status
 ./ralph-locks.sh cleanup
@@ -578,6 +648,10 @@ Set-Location ..
 # Check status
 ./scripts/ralph/ralph-status.ps1
 
+# Check PRD completion before starting
+./scripts/ralph/ralph-parallel.ps1 Check -Prd /path/to/prd.json
+./scripts/ralph/ralph-queue.ps1 check -Prd /path/to/prd.json -Quiet  # Quiet mode
+
 # Manage locks
 ./scripts/ralph/ralph-locks.ps1 Status
 ./scripts/ralph/ralph-locks.ps1 Cleanup
@@ -594,6 +668,8 @@ Ralph provides full cross-platform compatibility with both Bash and PowerShell i
 |---------|------|------------|
 | Single Instance | `ralph.sh` | `ralph.ps1` |
 | Multiple Instances | `ralph-parallel.sh` | `ralph-parallel.ps1` |
+| Queue Management | `ralph-queue.sh` | `ralph-queue.ps1` |
+| Queue Workers | `ralph-queue-workers.sh` | `ralph-queue-workers.ps1` |
 | Dashboard | `ralph-dashboard.sh` | `ralph-dashboard.ps1` |
 | Lock Management | `ralph-locks.sh` | `ralph-locks.ps1` |
 | Cleanup | `ralph-cleanup.sh` | `ralph-cleanup.ps1` |

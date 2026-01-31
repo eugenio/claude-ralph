@@ -33,7 +33,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('Start', 'Stop', 'Kill', 'Status', 'Dashboard', 'Queue', 'Help')]
+    [ValidateSet('Start', 'Stop', 'Kill', 'Status', 'Check', 'Dashboard', 'Queue', 'Help')]
     [string]$Command = 'Status',
 
     [Parameter()]
@@ -54,6 +54,10 @@ param(
 
     [Parameter()]
     [switch]$QueueMode,
+
+    [Parameter()]
+    [Alias('q')]
+    [switch]$Quiet,
 
     [Parameter(ValueFromRemainingArguments)]
     [string[]]$RemainingArgs
@@ -354,7 +358,105 @@ function Start-Dashboard {
     }
 }
 
+function Invoke-Check {
+    param(
+        [string]$PrdPath,
+        [switch]$QuietMode
+    )
+
+    # Default to local PRD file if not specified
+    if (-not $PrdPath) {
+        $paths = Get-RalphPaths
+        $PrdPath = $paths.PrdFile
+    }
+
+    # Convert to absolute path if needed
+    if (-not [System.IO.Path]::IsPathRooted($PrdPath)) {
+        $PrdPath = Join-Path (Get-Location) $PrdPath
+    }
+
+    if (-not (Test-Path $PrdPath)) {
+        if (-not $QuietMode) {
+            Write-Host "PRD file not found: $PrdPath" -ForegroundColor Red
+        }
+        $script:checkExitCode = 1
+        return
+    }
+
+    try {
+        $prdData = Get-Content $PrdPath -Raw | ConvertFrom-Json
+        $stories = @($prdData.userStories)
+        $total = $stories.Count
+        $complete = @($stories | Where-Object { $_.passes -eq $true }).Count
+        $incomplete = $total - $complete
+    }
+    catch {
+        if (-not $QuietMode) {
+            Write-Host "Error: Failed to parse PRD file: $_" -ForegroundColor Red
+        }
+        $script:checkExitCode = 1
+        return
+    }
+
+    if ($QuietMode) {
+        # Quiet mode: output count to stdout
+        Write-Output $incomplete
+        if ($incomplete -eq 0 -and $total -gt 0) {
+            $script:checkExitCode = 0  # Complete
+        }
+        else {
+            $script:checkExitCode = 1  # Incomplete or empty
+        }
+        return
+    }
+
+    # Verbose output
+    Write-Host ''
+    Write-Host ([string]::new([char]0x2550, 55)) -ForegroundColor Blue
+    Write-Host '         PRD STATUS CHECK' -ForegroundColor Cyan
+    Write-Host ([string]::new([char]0x2550, 55)) -ForegroundColor Blue
+    Write-Host ''
+
+    if ($total -eq 0) {
+        Write-Host '  PRD has no stories' -ForegroundColor Red
+        Write-Host "  File: $PrdPath"
+        Write-Host ''
+        Write-Host 'Incomplete: 0'
+        $script:checkExitCode = 1
+        return
+    }
+    elseif ($incomplete -eq 0) {
+        Write-Host '  STATUS: COMPLETE' -ForegroundColor Green
+        Write-Host ''
+        Write-Host "  Stories: $complete/$total (100%)"
+        Write-Host "  File: $PrdPath"
+        Write-Host ''
+        Write-Host 'Incomplete: 0'
+        $script:checkExitCode = 0
+        return
+    }
+    else {
+        $pct = [int]($complete * 100 / $total)
+        Write-Host '  STATUS: INCOMPLETE' -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host "  Stories: $complete/$total ($pct%)"
+        Write-Host "  Remaining: $incomplete"
+        Write-Host "  File: $PrdPath"
+        Write-Host ''
+        Write-Host '  Incomplete stories:'
+        foreach ($story in ($stories | Where-Object { $_.passes -ne $true })) {
+            Write-Host "    $($story.id): $($story.title)"
+        }
+        Write-Host ''
+        Write-Host "Incomplete: $incomplete"
+        $script:checkExitCode = 1
+        return
+    }
+}
+
 # Main
+$script:checkExitCode = 0
+
 switch ($Command) {
     'Start' {
         $startParams = @{
@@ -369,6 +471,7 @@ switch ($Command) {
     'Stop' { Stop-RalphInstances }
     'Kill' { Stop-RalphInstancesForce }
     'Status' { Show-Status }
+    'Check' { Invoke-Check -PrdPath $Prd -QuietMode:$Quiet; exit $script:checkExitCode }
     'Dashboard' { Start-Dashboard }
     'Queue' {
         # Delegate to ralph-queue.ps1

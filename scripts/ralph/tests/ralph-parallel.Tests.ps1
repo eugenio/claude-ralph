@@ -318,6 +318,113 @@ Describe 'Regression Tests' {
     }
 }
 
+# =============================================================================
+# CHECK COMMAND TESTS
+# =============================================================================
+
+Describe 'ralph-parallel.ps1 check command' {
+    BeforeAll {
+        $script:testDir = Join-Path $TestDrive 'check-test'
+        New-Item -Path $script:testDir -ItemType Directory -Force | Out-Null
+    }
+
+    Context 'Complete PRD' {
+        BeforeAll {
+            $script:completePrd = Join-Path $script:testDir 'complete.json'
+            @{
+                featureName = 'Complete Feature'
+                userStories = @(
+                    @{ id = 'US-001'; title = 'Story 1'; passes = $true },
+                    @{ id = 'US-002'; title = 'Story 2'; passes = $true },
+                    @{ id = 'US-003'; title = 'Story 3'; passes = $true }
+                )
+            } | ConvertTo-Json -Depth 5 | Set-Content $script:completePrd
+        }
+
+        It 'Returns 0 incomplete in quiet mode' {
+            $result = pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '$($script:completePrd)' -Quiet" 2>&1
+            $result | Should -Contain '0'
+        }
+
+        It 'Returns exit code 0 for complete PRD' {
+            pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '$($script:completePrd)' -Quiet; exit `$LASTEXITCODE"
+            $LASTEXITCODE | Should -Be 0
+        }
+
+        It 'Shows STATUS: COMPLETE in verbose mode' {
+            $output = pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '$($script:completePrd)'" 2>&1 | Out-String
+            $output | Should -Match 'STATUS: COMPLETE'
+        }
+    }
+
+    Context 'Incomplete PRD' {
+        BeforeAll {
+            $script:incompletePrd = Join-Path $script:testDir 'incomplete.json'
+            @{
+                featureName = 'Incomplete Feature'
+                userStories = @(
+                    @{ id = 'US-001'; title = 'Story 1'; passes = $true },
+                    @{ id = 'US-002'; title = 'Story 2'; passes = $false },
+                    @{ id = 'US-003'; title = 'Story 3'; passes = $false }
+                )
+            } | ConvertTo-Json -Depth 5 | Set-Content $script:incompletePrd
+        }
+
+        It 'Returns correct incomplete count in quiet mode' {
+            $result = pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '$($script:incompletePrd)' -Quiet" 2>&1
+            $result | Should -Contain '2'
+        }
+
+        It 'Returns exit code 1 for incomplete PRD' {
+            pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '$($script:incompletePrd)' -Quiet; exit `$LASTEXITCODE"
+            $LASTEXITCODE | Should -Be 1
+        }
+
+        It 'Shows STATUS: INCOMPLETE in verbose mode' {
+            $output = pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '$($script:incompletePrd)'" 2>&1 | Out-String
+            $output | Should -Match 'STATUS: INCOMPLETE'
+        }
+
+        It 'Shows remaining story count' {
+            $output = pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '$($script:incompletePrd)'" 2>&1 | Out-String
+            $output | Should -Match 'Remaining: 2'
+        }
+
+        It 'Lists incomplete stories' {
+            $output = pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '$($script:incompletePrd)'" 2>&1 | Out-String
+            $output | Should -Match 'US-002'
+            $output | Should -Match 'US-003'
+        }
+    }
+
+    Context 'Missing PRD file' {
+        It 'Returns error for non-existent file' {
+            pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '/nonexistent/prd.json' -Quiet; exit `$LASTEXITCODE"
+            $LASTEXITCODE | Should -Be 1
+        }
+    }
+
+    Context 'Empty PRD' {
+        BeforeAll {
+            $script:emptyPrd = Join-Path $script:testDir 'empty.json'
+            @{
+                featureName = 'Empty Feature'
+                userStories = @()
+            } | ConvertTo-Json -Depth 5 | Set-Content $script:emptyPrd
+        }
+
+        It 'Returns 0 incomplete for empty PRD' {
+            $result = pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '$($script:emptyPrd)' -Quiet" 2>&1
+            $result | Should -Contain '0'
+        }
+
+        It 'Returns exit code 1 for empty PRD' {
+            pwsh -NoProfile -Command "& '$($script:parallelScript)' Check -Prd '$($script:emptyPrd)' -Quiet; exit `$LASTEXITCODE"
+            $LASTEXITCODE | Should -Be 1
+        }
+    }
+}
+
 AfterAll {
     Remove-Module RalphUtils -ErrorAction SilentlyContinue
 }

@@ -21,7 +21,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('add', 'list', 'remove', 'clear', 'status', 'start', 'help')]
+    [ValidateSet('add', 'list', 'remove', 'clear', 'status', 'check', 'start', 'help')]
     [string]$Command = 'status',
 
     # Add command options
@@ -54,7 +54,12 @@ param(
 
     [Parameter()]
     [Alias('m')]
-    [int]$MaxIterations = 10
+    [int]$MaxIterations = 10,
+
+    # Check command options
+    [Parameter()]
+    [Alias('q')]
+    [switch]$Quiet
 )
 
 $ErrorActionPreference = 'Stop'
@@ -87,6 +92,7 @@ Commands:
   remove   Remove an entry from the queue
   clear    Clear completed entries
   status   Show queue summary
+  check    Check if a PRD is complete before adding
   start    Start workers to process queue
   help     Show this help message
 
@@ -101,6 +107,10 @@ List Command:
 
 Remove Command:
   -Id, -i ID           Entry ID to remove (required)
+
+Check Command:
+  -Prd, -p PATH        Path to prd.json file (required)
+  -Quiet, -q           Quiet mode (output count only, exit 0=complete, 1=incomplete)
 
 Start Command:
   -Count, -c N         Number of workers to start (default: CPU cores / 2)
@@ -290,6 +300,88 @@ function Invoke-Status {
     Write-Host ''
 }
 
+function Invoke-Check {
+    [CmdletBinding()]
+    param()
+
+    if (-not $script:Prd) {
+        Write-Host 'Error: PRD path required. Use -Prd or -p' -ForegroundColor Red
+        $script:checkExitCode = 1
+        return
+    }
+
+    # Convert to absolute path if needed
+    $prdPath = if ([System.IO.Path]::IsPathRooted($script:Prd)) { $script:Prd } else { Join-Path (Get-Location) $script:Prd }
+
+    if (-not (Test-Path $prdPath)) {
+        if (-not $script:Quiet) {
+            Write-Host "Error: PRD file not found: $prdPath" -ForegroundColor Red
+        }
+        $script:checkExitCode = 1
+        return
+    }
+
+    try {
+        $prdData = Get-Content $prdPath -Raw | ConvertFrom-Json
+        $stories = @($prdData.userStories)
+        $total = $stories.Count
+        $complete = @($stories | Where-Object { $_.passes -eq $true }).Count
+        $incomplete = $total - $complete
+    }
+    catch {
+        if (-not $script:Quiet) {
+            Write-Host "Error: Failed to parse PRD file: $_" -ForegroundColor Red
+        }
+        $script:checkExitCode = 1
+        return
+    }
+
+    if ($script:Quiet) {
+        # Quiet mode: output count to stdout
+        Write-Output $incomplete
+        if ($incomplete -eq 0 -and $total -gt 0) {
+            $script:checkExitCode = 0  # Complete
+        }
+        else {
+            $script:checkExitCode = 1  # Incomplete or empty
+        }
+        return
+    }
+
+    # Verbose output
+    Write-Host ''
+    if ($total -eq 0) {
+        Write-Host "PRD has no stories: $prdPath" -ForegroundColor Red
+        Write-Host ''
+        Write-Host "Incomplete: 0"
+        $script:checkExitCode = 1
+        return
+    }
+    elseif ($incomplete -eq 0) {
+        Write-Host "PRD COMPLETE: $complete/$total stories done" -ForegroundColor Green
+        Write-Host ''
+        Write-Host "  PRD: $prdPath"
+        Write-Host ''
+        Write-Host "Incomplete: 0"
+        $script:checkExitCode = 0
+        return
+    }
+    else {
+        Write-Host "PRD INCOMPLETE: $complete/$total stories done, $incomplete remaining" -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host "  PRD: $prdPath"
+        Write-Host ''
+        Write-Host '  Incomplete stories:'
+        foreach ($story in ($stories | Where-Object { $_.passes -ne $true })) {
+            Write-Host "    - $($story.id): $($story.title)"
+        }
+        Write-Host ''
+        Write-Host "Incomplete: $incomplete"
+        $script:checkExitCode = 1
+        return
+    }
+}
+
 function Invoke-Start {
     # Default count to CPU cores / 2
     if ($Count -le 0) {
@@ -329,12 +421,15 @@ function Invoke-Start {
 }
 
 # Main
+$script:checkExitCode = 0
+
 switch ($Command) {
     'add'    { Invoke-Add }
     'list'   { Invoke-List }
     'remove' { Invoke-Remove }
     'clear'  { Invoke-Clear }
     'status' { Invoke-Status }
+    'check'  { Invoke-Check; exit $script:checkExitCode }
     'start'  { Invoke-Start }
     'help'   { Show-Help }
     default  { Invoke-Status }

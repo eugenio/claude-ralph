@@ -1078,6 +1078,109 @@ Describe 'Queue Edge Cases' {
     }
 }
 
+# =============================================================================
+# CHECK COMMAND TESTS
+# =============================================================================
+
+Describe 'ralph-queue.ps1 check command' {
+    BeforeAll {
+        $script:testDir = Join-Path $TestDrive 'check-test'
+        New-Item -Path $script:testDir -ItemType Directory -Force | Out-Null
+        $script:queueScript = Join-Path $PSScriptRoot '..' 'ralph-queue.ps1'
+    }
+
+    Context 'Complete PRD' {
+        BeforeAll {
+            $script:completePrd = Join-Path $script:testDir 'complete.json'
+            @{
+                featureName = 'Complete Feature'
+                userStories = @(
+                    @{ id = 'US-001'; title = 'Story 1'; passes = $true },
+                    @{ id = 'US-002'; title = 'Story 2'; passes = $true },
+                    @{ id = 'US-003'; title = 'Story 3'; passes = $true }
+                )
+            } | ConvertTo-Json -Depth 5 | Set-Content $script:completePrd
+        }
+
+        It 'Returns 0 incomplete in quiet mode' {
+            $result = & $script:queueScript check -Prd $script:completePrd -Quiet
+            $result | Should -Be 0
+        }
+
+        It 'Returns exit code 0 for complete PRD' {
+            & $script:queueScript check -Prd $script:completePrd -Quiet
+            $LASTEXITCODE | Should -Be 0
+        }
+
+        It 'Shows COMPLETE status in verbose mode' {
+            $output = & $script:queueScript check -Prd $script:completePrd *>&1
+            ($output | Out-String) | Should -Match 'PRD COMPLETE: 3/3 stories done'
+        }
+    }
+
+    Context 'Incomplete PRD' {
+        BeforeAll {
+            $script:incompletePrd = Join-Path $script:testDir 'incomplete.json'
+            @{
+                featureName = 'Incomplete Feature'
+                userStories = @(
+                    @{ id = 'US-001'; title = 'Story 1'; passes = $true },
+                    @{ id = 'US-002'; title = 'Story 2'; passes = $false },
+                    @{ id = 'US-003'; title = 'Story 3'; passes = $false }
+                )
+            } | ConvertTo-Json -Depth 5 | Set-Content $script:incompletePrd
+        }
+
+        It 'Returns correct incomplete count in quiet mode' {
+            $result = & $script:queueScript check -Prd $script:incompletePrd -Quiet
+            $result | Should -Be 2
+        }
+
+        It 'Returns exit code 1 for incomplete PRD' {
+            & $script:queueScript check -Prd $script:incompletePrd -Quiet
+            $LASTEXITCODE | Should -Be 1
+        }
+
+        It 'Shows INCOMPLETE status with remaining count' {
+            $output = & $script:queueScript check -Prd $script:incompletePrd *>&1
+            ($output | Out-String) | Should -Match 'PRD INCOMPLETE: 1/3 stories done, 2 remaining'
+        }
+
+        It 'Lists incomplete stories' {
+            $output = & $script:queueScript check -Prd $script:incompletePrd *>&1
+            ($output | Out-String) | Should -Match 'US-002'
+            ($output | Out-String) | Should -Match 'US-003'
+        }
+    }
+
+    Context 'Missing PRD file' {
+        It 'Returns error for non-existent file' {
+            $result = & $script:queueScript check -Prd '/nonexistent/prd.json' -Quiet
+            $LASTEXITCODE | Should -Be 1
+        }
+    }
+
+    Context 'Empty PRD' {
+        BeforeAll {
+            $script:emptyPrd = Join-Path $script:testDir 'empty.json'
+            @{
+                featureName = 'Empty Feature'
+                userStories = @()
+            } | ConvertTo-Json -Depth 5 | Set-Content $script:emptyPrd
+        }
+
+        It 'Returns 0 incomplete for empty PRD' {
+            $result = & $script:queueScript check -Prd $script:emptyPrd -Quiet
+            $result | Should -Be 0
+        }
+
+        It 'Returns exit code 1 for empty PRD' {
+            & $script:queueScript check -Prd $script:emptyPrd -Quiet
+            $LASTEXITCODE | Should -Be 1
+        }
+    }
+}
+
 AfterAll {
     Remove-Module RalphUtils -ErrorAction SilentlyContinue
 }

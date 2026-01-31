@@ -52,6 +52,7 @@ Commands:
   remove   Remove an entry from the queue
   clear    Clear completed entries
   status   Show queue summary
+  check    Check if a PRD is complete before adding
   help     Show this help message
 
 Add Command:
@@ -65,6 +66,10 @@ List Command:
 
 Remove Command:
   -i, --id ID           Entry ID to remove (required)
+
+Check Command:
+  -p, --prd PATH        Path to prd.json file (required)
+  -q, --quiet           Quiet mode (exit code only: 0=complete, 1=incomplete)
 
 Examples:
   # Add a PRD to the queue
@@ -363,6 +368,95 @@ cmd_status() {
 }
 
 # =============================================================================
+# COMMAND: CHECK
+# =============================================================================
+
+cmd_check() {
+    local prd_path=""
+    local quiet=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--prd)
+                prd_path="$2"
+                shift 2
+                ;;
+            -q|--quiet)
+                quiet=1
+                shift
+                ;;
+            *)
+                # Assume positional argument is prd path
+                if [[ -z "$prd_path" ]]; then
+                    prd_path="$1"
+                else
+                    echo "Error: Unknown option: $1" >&2
+                    return 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$prd_path" ]]; then
+        echo "Error: PRD path required. Use -p or --prd" >&2
+        return 1
+    fi
+
+    # Convert to absolute path if needed
+    if [[ ! "$prd_path" = /* ]]; then
+        prd_path="$(cd "$(dirname "$prd_path")" && pwd)/$(basename "$prd_path")"
+    fi
+
+    if [[ ! -f "$prd_path" ]]; then
+        echo "Error: PRD file not found: $prd_path" >&2
+        return 1
+    fi
+
+    # Get story counts
+    local total complete incomplete
+    total=$(jq '.userStories | length' "$prd_path" 2>/dev/null || echo "0")
+    complete=$(jq '[.userStories[] | select(.passes == true)] | length' "$prd_path" 2>/dev/null || echo "0")
+    incomplete=$((total - complete))
+
+    if [[ "$quiet" -eq 1 ]]; then
+        # Quiet mode: output count and return exit code
+        echo "$incomplete"
+        if [[ "$incomplete" -eq 0 && "$total" -gt 0 ]]; then
+            return 0  # Complete
+        else
+            return 1  # Incomplete or empty
+        fi
+    fi
+
+    # Verbose output
+    echo ""
+    if [[ "$total" -eq 0 ]]; then
+        write_colored red "PRD has no stories: $prd_path"
+        echo ""
+        echo "Incomplete: 0"
+        return 1
+    elif [[ "$incomplete" -eq 0 ]]; then
+        write_colored green "PRD COMPLETE: $complete/$total stories done"
+        echo ""
+        echo "  PRD: $prd_path"
+        echo ""
+        echo "Incomplete: 0"
+        return 0
+    else
+        write_colored yellow "PRD INCOMPLETE: $complete/$total stories done, $incomplete remaining"
+        echo ""
+        echo "  PRD: $prd_path"
+        echo ""
+        echo "  Incomplete stories:"
+        jq -r '.userStories[] | select(.passes != true) | "    - \(.id): \(.title)"' "$prd_path" 2>/dev/null
+        echo ""
+        echo "Incomplete: $incomplete"
+        return 1
+    fi
+}
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -385,6 +479,9 @@ main() {
             ;;
         status)
             cmd_status "$@"
+            ;;
+        check)
+            cmd_check "$@"
             ;;
         help|--help|-h)
             show_help

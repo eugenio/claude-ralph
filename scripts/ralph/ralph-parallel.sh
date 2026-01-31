@@ -118,6 +118,7 @@ show_help() {
     echo "  stop                 Stop all instances gracefully (SIGTERM)"
     echo "  kill                 Force kill all instances (SIGKILL)"
     echo "  status               Show running instances"
+    echo "  check                Check if PRD is complete before starting"
     echo "  dashboard            Open monitoring dashboard"
     echo "  queue <subcommand>   Queue management (add, list, status, clear)"
     echo "  help                 Show this help"
@@ -126,12 +127,17 @@ show_help() {
     echo "  -c, --count N        Number of instances (default: CPU cores / 2)"
     echo "  -m, --max-iterations Max iterations per instance (default: 10)"
     echo ""
+    write_colored yellow "Check Options:"
+    echo "  -p, --prd PATH       Path to prd.json (default: local prd.json)"
+    echo "  -q, --quiet          Quiet mode (exit code only: 0=complete, 1=incomplete)"
+    echo ""
     write_colored yellow "Examples:"
     echo "  ./ralph-parallel.sh start -c 3"
+    echo "  ./ralph-parallel.sh check -p /path/to/prd.json"
+    echo "  ./ralph-parallel.sh check -q && echo 'Complete!' || echo 'Incomplete'"
     echo "  ./ralph-parallel.sh stop"
     echo "  ./ralph-parallel.sh status"
     echo "  ./ralph-parallel.sh queue add -p /project/prd.json -r /project"
-    echo "  ./ralph-parallel.sh queue list"
     echo ""
     write_colored yellow "Environment Variables:"
     echo "  RALPH_MAX_INSTANCES  Maximum instances allowed (default: 8)"
@@ -392,6 +398,99 @@ cmd_dashboard() {
     fi
 }
 
+cmd_check() {
+    local prd_path="$1"
+    local quiet=0
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--prd)
+                prd_path="$2"
+                shift 2
+                ;;
+            -q|--quiet)
+                quiet=1
+                shift
+                ;;
+            *)
+                if [[ -z "$prd_path" ]]; then
+                    prd_path="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Default to local PRD_FILE if not specified
+    if [[ -z "$prd_path" ]]; then
+        eval "$(get_ralph_paths)"
+        prd_path="$PRD_FILE"
+    fi
+
+    # Convert to absolute path if needed
+    if [[ ! "$prd_path" = /* ]]; then
+        prd_path="$(cd "$(dirname "$prd_path")" && pwd)/$(basename "$prd_path")"
+    fi
+
+    if [[ ! -f "$prd_path" ]]; then
+        [[ "$quiet" -eq 0 ]] && write_colored red "PRD file not found: $prd_path"
+        return 1
+    fi
+
+    # Get story counts
+    local total complete incomplete
+    total=$(jq '.userStories | length' "$prd_path" 2>/dev/null || echo "0")
+    complete=$(jq '[.userStories[] | select(.passes == true)] | length' "$prd_path" 2>/dev/null || echo "0")
+    incomplete=$((total - complete))
+
+    if [[ "$quiet" -eq 1 ]]; then
+        # Quiet mode: output count and return exit code
+        echo "$incomplete"
+        if [[ "$incomplete" -eq 0 && "$total" -gt 0 ]]; then
+            return 0  # Complete
+        else
+            return 1  # Incomplete or empty
+        fi
+    fi
+
+    # Verbose output
+    echo ""
+    write_colored blue "$(printf '═%.0s' {1..55})"
+    write_colored cyan "         PRD STATUS CHECK"
+    write_colored blue "$(printf '═%.0s' {1..55})"
+    echo ""
+
+    if [[ "$total" -eq 0 ]]; then
+        write_colored red "  PRD has no stories"
+        echo "  File: $prd_path"
+        echo ""
+        echo "Incomplete: 0"
+        return 1
+    elif [[ "$incomplete" -eq 0 ]]; then
+        write_colored green "  STATUS: COMPLETE"
+        echo ""
+        echo "  Stories: $complete/$total (100%)"
+        echo "  File: $prd_path"
+        echo ""
+        echo "Incomplete: 0"
+        return 0
+    else
+        local pct=$((complete * 100 / total))
+        write_colored yellow "  STATUS: INCOMPLETE"
+        echo ""
+        echo "  Stories: $complete/$total ($pct%)"
+        echo "  Remaining: $incomplete"
+        echo "  File: $prd_path"
+        echo ""
+        echo "  Incomplete stories:"
+        jq -r '.userStories[] | select(.passes != true) | "    \(.id): \(.title)"' "$prd_path" 2>/dev/null
+        echo ""
+        echo "Incomplete: $incomplete"
+        return 1
+    fi
+}
+
 # =============================================================================
 # ARGUMENT PARSING
 # =============================================================================
@@ -401,11 +500,20 @@ parse_args() {
     local count=0
     local max_iterations=0
 
+    local check_args=()
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             start|stop|kill|status|dashboard|help)
                 command="$1"
                 shift
+                ;;
+            check)
+                command="check"
+                shift
+                # Collect remaining args for check command
+                check_args=("$@")
+                break
                 ;;
             queue)
                 # Delegate immediately to ralph-queue.sh with remaining args
@@ -454,6 +562,9 @@ parse_args() {
             ;;
         status)
             cmd_status
+            ;;
+        check)
+            cmd_check "${check_args[@]}"
             ;;
         dashboard)
             cmd_dashboard
