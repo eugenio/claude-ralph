@@ -239,6 +239,9 @@ Ralph supports running multiple instances in parallel to speed up PRD completion
 # Start 3 parallel instances, each with max 10 iterations
 ./scripts/ralph/ralph-parallel.sh start -c 3 -m 10
 
+# Use external PRD file and project root (for running from different directory)
+./scripts/ralph/ralph-parallel.sh start -p /path/to/prd.json -r /path/to/project -c 3
+
 # Check status of running instances
 ./scripts/ralph/ralph-parallel.sh status
 
@@ -255,12 +258,17 @@ Ralph supports running multiple instances in parallel to speed up PRD completion
 **Options:**
 - `-c COUNT` or `--count COUNT` - Number of instances (default: CPU cores / 2)
 - `-m ITERATIONS` or `--max-iterations ITERATIONS` - Max iterations per instance (default: 10)
+- `-p PATH` or `--prd PATH` - Path to prd.json file (for external PRD locations)
+- `-r PATH` or `--project PATH` - Project root directory (for running from different directory)
 
 ### PowerShell (ralph-parallel.ps1)
 
 ```powershell
 # Start 3 parallel instances, each with max 10 iterations
 pwsh ./scripts/ralph/ralph-parallel.ps1 Start -Count 3 -MaxIterations 10
+
+# Use external PRD file and project root
+pwsh ./scripts/ralph/ralph-parallel.ps1 Start -Prd /path/to/prd.json -ProjectRoot /path/to/project -Count 3
 
 # Check status of running instances
 pwsh ./scripts/ralph/ralph-parallel.ps1 Status
@@ -274,6 +282,12 @@ pwsh ./scripts/ralph/ralph-parallel.ps1 Kill
 # Open monitoring dashboard
 pwsh ./scripts/ralph/ralph-parallel.ps1 Dashboard
 ```
+
+**Options:**
+- `-Count N` or `-c N` - Number of instances (default: CPU cores / 2)
+- `-MaxIterations M` or `-m M` - Max iterations per instance (default: 10)
+- `-Prd PATH` or `-p PATH` - Path to prd.json file
+- `-ProjectRoot PATH` or `-r PATH` - Project root directory
 
 ### Environment Variables
 
@@ -349,6 +363,29 @@ Skills are automatically available when running ralph autonomously. Global insta
 **If you see this on older versions**:
 - Update to the latest ralph.sh from the repo
 - The fix adds a double-check: even if the tag is detected, ralph now verifies the PRD before exiting
+
+### Parallel Instances Stuck in "waiting" State
+
+**Symptom**: Dashboard shows instances with state "waiting" but no stories are being claimed.
+
+**Cause**: All incomplete stories have stale `claimedBy` values from dead instances. The claiming logic filters out stories where `claimedBy` is not null, even if the claiming instance is gone.
+
+**Fix**: Clear stale claims from the PRD:
+```bash
+# Check which stories have stale claims
+cat scripts/ralph/prd.json | jq '.userStories[] | select(.passes == false) | {id, claimedBy}'
+
+# Clear all claims
+jq '.userStories |= map(.claimedBy = null)' scripts/ralph/prd.json > /tmp/prd-clean.json && mv /tmp/prd-clean.json scripts/ralph/prd.json
+
+# Also clear any stale lock files
+rm -rf scripts/ralph/locks/*.lock
+```
+
+**Prevention**: Use `ralph-locks.sh cleanup` periodically to remove stale locks:
+```bash
+./scripts/ralph/ralph-locks.sh cleanup
+```
 
 ### PowerShell Troubleshooting
 
