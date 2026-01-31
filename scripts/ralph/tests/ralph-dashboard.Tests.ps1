@@ -20,6 +20,16 @@ BeforeAll {
 
     # Source the dashboard script for testing internal functions
     $dashboardPath = Join-Path $PSScriptRoot '..' 'ralph-dashboard.ps1'
+
+    # Helper function to create links (Junction on Windows, SymbolicLink on Unix)
+    function New-TestLink {
+        param(
+            [string]$Path,
+            [string]$Target
+        )
+        $linkType = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'Junction' } else { 'SymbolicLink' }
+        New-Item -ItemType $linkType -Path $Path -Target $Target -Force | Out-Null
+    }
 }
 
 # =============================================================================
@@ -163,8 +173,8 @@ Describe 'Get-AllProjectsPrdStatus' {
         # Create junctions/symlinks in global registry
         $link1 = Join-Path $instancesDir 'incomplete-proj-test-instance-1'
         $link2 = Join-Path $instancesDir 'complete-proj-test-instance-2'
-        New-Item -ItemType Junction -Path $link1 -Target $incompleteInstanceDir -Force | Out-Null
-        New-Item -ItemType Junction -Path $link2 -Target $completeInstanceDir -Force | Out-Null
+        New-TestLink -Path $link1 -Target $incompleteInstanceDir
+        New-TestLink -Path $link2 -Target $completeInstanceDir
     }
 
     AfterAll {
@@ -224,7 +234,7 @@ Describe 'Get-AllProjectsPrdStatus' {
             # Add to global registry
             $instancesDir = Join-Path $script:testGlobalDir 'instances'
             $link3 = Join-Path $instancesDir 'more-incomplete-proj-test-instance-3'
-            New-Item -ItemType Junction -Path $link3 -Target $moreIncompleteInstanceDir -Force | Out-Null
+            New-TestLink -Path $link3 -Target $moreIncompleteInstanceDir
         }
 
         It 'Sorts by remaining work descending' {
@@ -271,7 +281,7 @@ Describe 'Clear-RalphGlobalRegistry' {
 
             # Create and remove target to make a broken link
             New-Item -Path $nonExistentTarget -ItemType Directory -Force | Out-Null
-            New-Item -ItemType Junction -Path $staleLink -Target $nonExistentTarget -Force | Out-Null
+            New-TestLink -Path $staleLink -Target $nonExistentTarget
             Remove-Item -Path $nonExistentTarget -Recurse -Force
         }
 
@@ -321,7 +331,7 @@ Describe 'Clear-RalphGlobalRegistry' {
             if (Test-Path $link) {
                 Remove-Item $link -Force -Recurse
             }
-            New-Item -ItemType Junction -Path $link -Target $instanceDir -Force | Out-Null
+            New-TestLink -Path $link -Target $instanceDir
         }
 
         It 'Removes completed project entries when -IncludeCompleted is specified' {
