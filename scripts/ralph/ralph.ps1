@@ -53,7 +53,13 @@ param(
 
     [Parameter()]
     [Alias('r')]
-    [string]$ProjectRoot
+    [string]$ProjectRoot,
+
+    [Parameter()]
+    [switch]$QueueMode,
+
+    [Parameter()]
+    [string]$QueueEntryId
 )
 
 # Import the shared utilities module
@@ -314,6 +320,94 @@ function Test-CompletionSignal {
     return $matches.Count -gt 0
 }
 
+function Invoke-QueueContinuation {
+    <#
+    .SYNOPSIS
+        Handles queue continuation when PRD completes.
+    .DESCRIPTION
+        If in queue mode, marks current entry as completed and checks for next PRD.
+        If another PRD is available, starts working on it.
+    .OUTPUTS
+        Returns $true if continuing with a new PRD, $false otherwise.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('completed', 'failed')]
+        [string]$CurrentStatus
+    )
+
+    # Only continue if in queue mode
+    if (-not $QueueMode) {
+        return $false
+    }
+
+    Add-RalphInstanceLog "Queue mode: marking current entry as $CurrentStatus"
+
+    # Mark current queue entry as completed/failed
+    if ($QueueEntryId) {
+        try {
+            Complete-RalphQueueEntry -EntryId $QueueEntryId -Status $CurrentStatus
+            Add-RalphInstanceLog "Marked queue entry $QueueEntryId as $CurrentStatus"
+        }
+        catch {
+            Add-RalphInstanceLog "Warning: Failed to update queue entry: $_"
+        }
+    }
+
+    # Check for next pending entry
+    Add-RalphInstanceLog "Checking global queue for next PRD..."
+    $nextEntry = Get-RalphNextQueuedPrd
+
+    if ($null -eq $nextEntry) {
+        Add-RalphInstanceLog "No more entries in queue. Exiting."
+        return $false
+    }
+
+    Add-RalphInstanceLog "Found next PRD in queue: $($nextEntry.id)"
+    Add-RalphInstanceLog "  PRD: $($nextEntry.prdPath)"
+    Add-RalphInstanceLog "  Project: $($nextEntry.projectRoot)"
+
+    # Claim the entry
+    $instanceId = Get-RalphInstanceId
+    try {
+        $claimed = Request-RalphQueueEntryClaim -InstanceId $instanceId
+        if ($null -eq $claimed) {
+            Add-RalphInstanceLog "Failed to claim queue entry (may have been claimed by another worker)"
+            return $false
+        }
+    }
+    catch {
+        Add-RalphInstanceLog "Error claiming queue entry: $_"
+        return $false
+    }
+
+    Write-Host ''
+    Write-Host ([string]::new([char]0x2550, 55)) -ForegroundColor Magenta
+    Write-Host '  QUEUE: Starting next PRD' -ForegroundColor Magenta
+    Write-Host "  Project: $(Split-Path $claimed.projectRoot -Leaf)" -ForegroundColor Cyan
+    Write-Host ([string]::new([char]0x2550, 55)) -ForegroundColor Magenta
+    Write-Host ''
+
+    # Start ralph.ps1 with the new PRD (recursive call)
+    $ralphScript = $PSCommandPath
+    $params = @{
+        MaxIterations = $MaxIterations
+        PrdFile       = $claimed.prdPath
+        ProjectRoot   = $claimed.projectRoot
+        QueueMode     = $true
+        QueueEntryId  = $claimed.id
+    }
+
+    Add-RalphInstanceLog "Launching ralph for next PRD: $($claimed.prdPath)"
+
+    # Execute ralph for the next PRD
+    & $ralphScript @params
+    $exitCode = $LASTEXITCODE
+
+    # Exit with the same code as the nested call
+    exit $exitCode
+}
+
 # Main execution
 function Main {
     # Check dependencies
@@ -378,6 +472,8 @@ function Main {
             Write-ColoredOutput 'All stories complete! Exiting successfully.' -Color Green
             Add-RalphInstanceLog "All stories complete at iteration $i"
             Update-RalphStatus -State 'completed' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+            # Check queue for next PRD (returns if continuing)
+            Invoke-QueueContinuation -CurrentStatus 'completed'
             exit 0
         }
 
@@ -390,6 +486,8 @@ function Main {
             if (Test-AllStoriesComplete -Prd (Read-RalphPrdSafe)) {
                 Write-ColoredOutput 'All stories complete! Exiting successfully.' -Color Green
                 Update-RalphStatus -State 'completed' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+                # Check queue for next PRD (returns if continuing)
+                Invoke-QueueContinuation -CurrentStatus 'completed'
                 exit 0
             }
             else {
@@ -469,6 +567,8 @@ function Main {
             Show-CompleteBanner
             Add-RalphInstanceLog "Done! All stories complete at iteration $i (verified via COMPLETE signal + PRD check)"
             Update-RalphStatus -State 'completed' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+            # Check queue for next PRD (returns if continuing)
+            Invoke-QueueContinuation -CurrentStatus 'completed'
             exit 0
         }
         elseif ($hasSignal) {
@@ -481,6 +581,8 @@ function Main {
             Show-CompleteBanner
             Add-RalphInstanceLog "Done! All stories verified complete at iteration $i (via PRD check)"
             Update-RalphStatus -State 'completed' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+            # Check queue for next PRD (returns if continuing)
+            Invoke-QueueContinuation -CurrentStatus 'completed'
             exit 0
         }
 
@@ -510,6 +612,9 @@ function Main {
     if ($script:CurrentStoryId) {
         Remove-RalphStoryClaim -StoryId $script:CurrentStoryId
     }
+
+    # Check queue for next PRD even on max iterations (mark current as failed)
+    Invoke-QueueContinuation -CurrentStatus 'failed'
 }
 
 # Run main

@@ -33,13 +33,15 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('Start', 'Stop', 'Kill', 'Status', 'Dashboard', 'Help')]
+    [ValidateSet('Start', 'Stop', 'Kill', 'Status', 'Dashboard', 'Queue', 'Help')]
     [string]$Command = 'Status',
 
     [Parameter()]
+    [Alias('c')]
     [int]$Count = 0,
 
     [Parameter()]
+    [Alias('m')]
     [int]$MaxIterations = 10,
 
     [Parameter()]
@@ -48,7 +50,13 @@ param(
 
     [Parameter()]
     [Alias('r')]
-    [string]$ProjectRoot
+    [string]$ProjectRoot,
+
+    [Parameter()]
+    [switch]$QueueMode,
+
+    [Parameter(ValueFromRemainingArguments)]
+    [string[]]$RemainingArgs
 )
 
 # Import module
@@ -105,6 +113,7 @@ function Show-Help {
     Write-Host '  Kill                                  Force kill all instances'
     Write-Host '  Status                                Show running instances'
     Write-Host '  Dashboard                             Open monitoring dashboard'
+    Write-Host '  Queue <subcommand>                    Queue management (add, list, status, start)'
     Write-Host '  Help                                  Show this help'
     Write-Host ''
     Write-Host 'Options:' -ForegroundColor Yellow
@@ -131,7 +140,8 @@ function Start-RalphInstances {
         [int]$Count,
         [int]$MaxIterations,
         [string]$PrdPath,
-        [string]$ProjectPath
+        [string]$ProjectPath,
+        [switch]$QueueMode
     )
 
     if ($Count -le 0) {
@@ -186,7 +196,7 @@ function Start-RalphInstances {
         }
 
         $job = Start-Job -ScriptBlock {
-            param($script, $iterations, $prd, $project)
+            param($script, $iterations, $prd, $project, $queueMode)
             $params = @{
                 MaxIterations = $iterations
             }
@@ -196,8 +206,11 @@ function Start-RalphInstances {
             if ($project) {
                 $params['ProjectRoot'] = $project
             }
+            if ($queueMode) {
+                $params['QueueMode'] = $true
+            }
             & $script @params
-        } -ArgumentList $ralphScript, $MaxIterations, $PrdPath, $ProjectPath
+        } -ArgumentList $ralphScript, $MaxIterations, $PrdPath, $ProjectPath, $QueueMode.IsPresent
 
         $jobs += @{
             Id          = $job.Id
@@ -291,6 +304,11 @@ function Show-Status {
     Write-Host ('{0,-10} {1,-12} {2,-12} {3,-15}' -f '------', '------', '--------', '-----')
 
     foreach ($savedJob in $savedJobs) {
+        # Skip entries with null/empty Id
+        if ($null -eq $savedJob -or $null -eq $savedJob.Id -or $savedJob.Id -eq '') {
+            continue
+        }
+
         $job = Get-Job -Id $savedJob.Id -ErrorAction SilentlyContinue
         $status = if ($job) { $job.State } else { 'Gone' }
         $color = switch ($status) {
@@ -338,11 +356,29 @@ function Start-Dashboard {
 
 # Main
 switch ($Command) {
-    'Start' { Start-RalphInstances -Count $Count -MaxIterations $MaxIterations -PrdPath $Prd -ProjectPath $ProjectRoot }
+    'Start' {
+        $startParams = @{
+            Count = $Count
+            MaxIterations = $MaxIterations
+            PrdPath = $Prd
+            ProjectPath = $ProjectRoot
+        }
+        if ($QueueMode) { $startParams['QueueMode'] = $true }
+        Start-RalphInstances @startParams
+    }
     'Stop' { Stop-RalphInstances }
     'Kill' { Stop-RalphInstancesForce }
     'Status' { Show-Status }
     'Dashboard' { Start-Dashboard }
+    'Queue' {
+        # Delegate to ralph-queue.ps1
+        $queueScript = Join-Path $PSScriptRoot 'ralph-queue.ps1'
+        if (Test-Path $queueScript) {
+            & $queueScript @RemainingArgs
+        } else {
+            Write-Host 'Error: ralph-queue.ps1 not found' -ForegroundColor Red
+        }
+    }
     'Help' { Show-Help }
     default { Show-Help }
 }
