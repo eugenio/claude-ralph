@@ -36,6 +36,10 @@ jobs:
       - name: Install Pester
         shell: pwsh
         run: |
+          # Register PSGallery if not present (workaround for Windows runner issue)
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default -ErrorAction SilentlyContinue
+          }
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module -Name Pester -MinimumVersion 5.0 -Force -SkipPublisherCheck -Scope CurrentUser
           Get-Module -Name Pester -ListAvailable | Select-Object -First 1
