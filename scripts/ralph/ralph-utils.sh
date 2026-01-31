@@ -1391,3 +1391,453 @@ render_progress_bar() {
     bar+="]"
     printf "%s" "$bar"
 }
+
+# =============================================================================
+# GLOBAL QUEUE FUNCTIONS
+# =============================================================================
+
+# get_ralph_queue_file()
+# Returns the path to the global queue file
+# Output: Path to queue.json
+#
+get_ralph_queue_file() {
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    echo "$global_dir/queue.json"
+}
+
+# get_ralph_queue_lock()
+# Returns the path to the queue lock file
+# Output: Path to queue.lock
+#
+get_ralph_queue_lock() {
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    echo "$global_dir/queue.lock"
+}
+
+# init_ralph_queue()
+# Creates the queue.json file if it doesn't exist
+# Returns: 0 on success
+#
+init_ralph_queue() {
+    local global_dir queue_file
+    global_dir=$(get_ralph_global_dir)
+    queue_file=$(get_ralph_queue_file)
+
+    # Create global directory if needed
+    if [[ ! -d "$global_dir" ]]; then
+        mkdir -p "$global_dir" 2>/dev/null || return 1
+        chmod 700 "$global_dir" 2>/dev/null || true
+    fi
+
+    # Create queue file if it doesn't exist
+    if [[ ! -f "$queue_file" ]]; then
+        echo '{"entries": []}' > "$queue_file"
+        chmod 600 "$queue_file" 2>/dev/null || true
+    fi
+
+    return 0
+}
+
+# _generate_queue_entry_id()
+# Generates a unique ID for a queue entry
+# Output: Unique ID string
+#
+_generate_queue_entry_id() {
+    local timestamp random_part
+    timestamp=$(date +%s%N 2>/dev/null || date +%s)
+    random_part=$(head -c 8 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n' || echo "$$")
+    echo "q-${timestamp:0:10}-${random_part:0:8}"
+}
+
+# add_ralph_queue_entry()
+# Adds a PRD to the global queue
+# Arguments:
+#   $1 - Path to prd.json file (absolute)
+#   $2 - Project root directory (absolute)
+#   $3 - Priority (optional, default 10, lower = higher priority)
+# Returns: 0 on success, 1 on error
+# Output: Entry ID on success
+#
+add_ralph_queue_entry() {
+    local prd_path="$1"
+    local project_root="$2"
+    local priority="${3:-10}"
+
+    # Validate inputs
+    if [[ ! -f "$prd_path" ]]; then
+        echo "Error: PRD file not found: $prd_path" >&2
+        return 1
+    fi
+
+    if [[ ! -d "$project_root" ]]; then
+        echo "Error: Project root not found: $project_root" >&2
+        return 1
+    fi
+
+    # Initialize queue if needed
+    init_ralph_queue || return 1
+
+    local queue_file queue_lock entry_id now
+    queue_file=$(get_ralph_queue_file)
+    queue_lock=$(get_ralph_queue_lock)
+    entry_id=$(_generate_queue_entry_id)
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    # Create the new entry
+    local new_entry
+    new_entry=$(jq -n \
+        --arg id "$entry_id" \
+        --arg prdPath "$prd_path" \
+        --arg projectRoot "$project_root" \
+        --argjson priority "$priority" \
+        --arg addedAt "$now" \
+        '{
+            id: $id,
+            prdPath: $prdPath,
+            projectRoot: $projectRoot,
+            priority: $priority,
+            status: "pending",
+            addedAt: $addedAt,
+            claimedBy: null,
+            claimedAt: null,
+            completedAt: null
+        }')
+
+    # Add entry with file locking
+    (
+        if command -v flock &>/dev/null; then
+            flock -x 200
+        fi
+
+        local queue_json
+        queue_json=$(cat "$queue_file")
+
+        local updated_queue
+        updated_queue=$(echo "$queue_json" | jq --argjson entry "$new_entry" '.entries += [$entry]')
+
+        echo "$updated_queue" > "$queue_file.tmp"
+        mv "$queue_file.tmp" "$queue_file"
+    ) 200>"$queue_lock"
+
+    echo "$entry_id"
+    return 0
+}
+
+# get_ralph_queue_entries()
+# Returns queue entries, optionally filtered by status
+# Arguments:
+#   $1 - Status filter: "pending", "active", "completed", "failed", or "all" (default: "pending")
+# Output: JSON array of entries
+#
+get_ralph_queue_entries() {
+    local status_filter="${1:-pending}"
+
+    local queue_file
+    queue_file=$(get_ralph_queue_file)
+
+    if [[ ! -f "$queue_file" ]]; then
+        echo "[]"
+        return 0
+    fi
+
+    local entries
+    if [[ "$status_filter" == "all" ]]; then
+        entries=$(jq '.entries | sort_by(.priority)' "$queue_file")
+    else
+        entries=$(jq --arg status "$status_filter" \
+            '[.entries[] | select(.status == $status)] | sort_by(.priority)' \
+            "$queue_file")
+    fi
+
+    echo "$entries"
+}
+
+# get_ralph_queue_entry()
+# Returns a specific queue entry by ID
+# Arguments:
+#   $1 - Entry ID
+# Output: JSON object of entry
+# Returns: 0 if found, 1 if not found
+#
+get_ralph_queue_entry() {
+    local entry_id="$1"
+
+    local queue_file
+    queue_file=$(get_ralph_queue_file)
+
+    if [[ ! -f "$queue_file" ]]; then
+        return 1
+    fi
+
+    local entry
+    entry=$(jq --arg id "$entry_id" '.entries[] | select(.id == $id)' "$queue_file")
+
+    if [[ -z "$entry" || "$entry" == "null" ]]; then
+        return 1
+    fi
+
+    echo "$entry"
+    return 0
+}
+
+# claim_ralph_queue_entry()
+# Claims the next pending queue entry for processing
+# Arguments:
+#   $1 - Instance ID claiming the entry
+# Output: JSON of claimed entry
+# Returns: 0 if claimed, 1 if no entries available
+#
+claim_ralph_queue_entry() {
+    local instance_id="$1"
+
+    local queue_file queue_lock
+    queue_file=$(get_ralph_queue_file)
+    queue_lock=$(get_ralph_queue_lock)
+
+    if [[ ! -f "$queue_file" ]]; then
+        return 1
+    fi
+
+    local now
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    # Claim with file locking
+    (
+        if command -v flock &>/dev/null; then
+            flock -x 200
+        fi
+
+        local queue_json
+        queue_json=$(cat "$queue_file")
+
+        # Find first pending entry (sorted by priority)
+        local pending_entry entry_id
+        pending_entry=$(echo "$queue_json" | jq '[.entries[] | select(.status == "pending")] | sort_by(.priority) | .[0]')
+
+        if [[ -z "$pending_entry" || "$pending_entry" == "null" ]]; then
+            exit 1
+        fi
+
+        entry_id=$(echo "$pending_entry" | jq -r '.id')
+
+        # Update the entry
+        local updated_queue
+        updated_queue=$(echo "$queue_json" | jq \
+            --arg id "$entry_id" \
+            --arg claimedBy "$instance_id" \
+            --arg claimedAt "$now" \
+            '.entries |= map(
+                if .id == $id then
+                    .status = "active" | .claimedBy = $claimedBy | .claimedAt = $claimedAt
+                else .
+                end
+            )')
+
+        echo "$updated_queue" > "$queue_file.tmp"
+        mv "$queue_file.tmp" "$queue_file"
+
+        # Output the claimed entry with updated status
+        echo "$pending_entry" | jq \
+            --arg claimedBy "$instance_id" \
+            --arg claimedAt "$now" \
+            '. + {status: "active", claimedBy: $claimedBy, claimedAt: $claimedAt}'
+
+    ) 200>"$queue_lock"
+
+    local exit_code=$?
+    return $exit_code
+}
+
+# complete_ralph_queue_entry()
+# Marks a queue entry as completed or failed
+# Arguments:
+#   $1 - Entry ID
+#   $2 - Status: "completed" (default) or "failed"
+# Returns: 0 on success, 1 if entry not found
+#
+complete_ralph_queue_entry() {
+    local entry_id="$1"
+    local status="${2:-completed}"
+
+    local queue_file queue_lock
+    queue_file=$(get_ralph_queue_file)
+    queue_lock=$(get_ralph_queue_lock)
+
+    if [[ ! -f "$queue_file" ]]; then
+        return 1
+    fi
+
+    local now
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    # Update with file locking
+    (
+        if command -v flock &>/dev/null; then
+            flock -x 200
+        fi
+
+        local queue_json
+        queue_json=$(cat "$queue_file")
+
+        # Check if entry exists
+        local entry_exists
+        entry_exists=$(echo "$queue_json" | jq --arg id "$entry_id" '[.entries[] | select(.id == $id)] | length')
+
+        if [[ "$entry_exists" -eq 0 ]]; then
+            exit 1
+        fi
+
+        # Update the entry
+        local updated_queue
+        updated_queue=$(echo "$queue_json" | jq \
+            --arg id "$entry_id" \
+            --arg status "$status" \
+            --arg completedAt "$now" \
+            '.entries |= map(
+                if .id == $id then
+                    .status = $status | .completedAt = $completedAt
+                else .
+                end
+            )')
+
+        echo "$updated_queue" > "$queue_file.tmp"
+        mv "$queue_file.tmp" "$queue_file"
+    ) 200>"$queue_lock"
+
+    return $?
+}
+
+# remove_ralph_queue_entry()
+# Removes an entry from the queue
+# Arguments:
+#   $1 - Entry ID
+# Returns: 0 on success, 1 if entry not found
+#
+remove_ralph_queue_entry() {
+    local entry_id="$1"
+
+    local queue_file queue_lock
+    queue_file=$(get_ralph_queue_file)
+    queue_lock=$(get_ralph_queue_lock)
+
+    if [[ ! -f "$queue_file" ]]; then
+        return 1
+    fi
+
+    # Remove with file locking
+    (
+        if command -v flock &>/dev/null; then
+            flock -x 200
+        fi
+
+        local queue_json
+        queue_json=$(cat "$queue_file")
+
+        # Check if entry exists
+        local entry_exists
+        entry_exists=$(echo "$queue_json" | jq --arg id "$entry_id" '[.entries[] | select(.id == $id)] | length')
+
+        if [[ "$entry_exists" -eq 0 ]]; then
+            exit 1
+        fi
+
+        # Remove the entry
+        local updated_queue
+        updated_queue=$(echo "$queue_json" | jq \
+            --arg id "$entry_id" \
+            '.entries |= [.[] | select(.id != $id)]')
+
+        echo "$updated_queue" > "$queue_file.tmp"
+        mv "$queue_file.tmp" "$queue_file"
+    ) 200>"$queue_lock"
+
+    return $?
+}
+
+# clear_ralph_queue_completed()
+# Removes all completed entries from the queue
+# Output: Number of entries removed
+# Returns: 0 on success
+#
+clear_ralph_queue_completed() {
+    local queue_file queue_lock
+    queue_file=$(get_ralph_queue_file)
+    queue_lock=$(get_ralph_queue_lock)
+
+    if [[ ! -f "$queue_file" ]]; then
+        echo "0"
+        return 0
+    fi
+
+    # Clear with file locking
+    (
+        if command -v flock &>/dev/null; then
+            flock -x 200
+        fi
+
+        local queue_json
+        queue_json=$(cat "$queue_file")
+
+        # Count completed entries
+        local completed_count
+        completed_count=$(echo "$queue_json" | jq '[.entries[] | select(.status == "completed")] | length')
+
+        # Remove completed entries
+        local updated_queue
+        updated_queue=$(echo "$queue_json" | jq \
+            '.entries |= [.[] | select(.status != "completed")]')
+
+        echo "$updated_queue" > "$queue_file.tmp"
+        mv "$queue_file.tmp" "$queue_file"
+
+        echo "$completed_count"
+    ) 200>"$queue_lock"
+}
+
+# get_ralph_queue_summary()
+# Returns a summary of queue status counts
+# Output: JSON object with status counts
+#
+get_ralph_queue_summary() {
+    local queue_file
+    queue_file=$(get_ralph_queue_file)
+
+    if [[ ! -f "$queue_file" ]]; then
+        echo '{"total": 0, "pending": 0, "active": 0, "completed": 0, "failed": 0}'
+        return 0
+    fi
+
+    jq '{
+        total: (.entries | length),
+        pending: ([.entries[] | select(.status == "pending")] | length),
+        active: ([.entries[] | select(.status == "active")] | length),
+        completed: ([.entries[] | select(.status == "completed")] | length),
+        failed: ([.entries[] | select(.status == "failed")] | length)
+    }' "$queue_file"
+}
+
+# get_ralph_next_queued_prd()
+# Gets the next pending PRD from the global queue without claiming it
+# Output: JSON object of next pending entry, or empty if none
+# Returns: 0 if found, 1 if queue is empty
+#
+get_ralph_next_queued_prd() {
+    local queue_file
+    queue_file=$(get_ralph_queue_file)
+
+    if [[ ! -f "$queue_file" ]]; then
+        return 1
+    fi
+
+    local next_entry
+    next_entry=$(jq '[.entries[] | select(.status == "pending")] | sort_by(.priority) | .[0]' "$queue_file")
+
+    if [[ -z "$next_entry" || "$next_entry" == "null" ]]; then
+        return 1
+    fi
+
+    echo "$next_entry"
+    return 0
+}

@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MAX_ITERATIONS=10
 PRD_PATH=""
 PROJECT_PATH=""
+QUEUE_MODE=0
+QUEUE_ENTRY_ID=""
 
 # Parse arguments
 show_help() {
@@ -25,12 +27,14 @@ Usage: ./ralph.sh [options] [max_iterations]
 Options:
   -p, --prd PATH       Path to prd.json file (default: ./prd.json in script dir)
   -r, --project PATH   Project root directory (default: prd.json directory)
+  -q, --queue-mode     Enable queue mode: check global queue after PRD completion
   -h, --help           Show this help message
 
 Examples:
   ./ralph.sh 20                              # Run 20 iterations with local prd.json
   ./ralph.sh --prd /path/to/prd.json 10      # Use external prd.json
   ./ralph.sh -p /project/prd.json -r /project # Specify both prd and project root
+  ./ralph.sh --queue-mode                    # Run with queue mode enabled
 EOF
     exit 0
 }
@@ -43,6 +47,15 @@ while [[ $# -gt 0 ]]; do
             ;;
         -r|--project)
             PROJECT_PATH="$2"
+            shift 2
+            ;;
+        -q|--queue-mode)
+            QUEUE_MODE=1
+            shift
+            ;;
+        --queue-entry)
+            # Internal use: queue entry ID being processed
+            QUEUE_ENTRY_ID="$2"
             shift 2
             ;;
         -h|--help)
@@ -637,6 +650,94 @@ unregister_ralph_global_instance() {
 }
 
 # =============================================================================
+# QUEUE FUNCTIONS (for --queue-mode)
+# =============================================================================
+
+# Source ralph-utils.sh for queue functions if in queue mode
+if [ "$QUEUE_MODE" = "1" ] || [ -n "$QUEUE_ENTRY_ID" ]; then
+    source "$SCRIPT_DIR/ralph-utils.sh" 2>/dev/null || {
+        echo "Warning: Could not source ralph-utils.sh for queue functions" >&2
+    }
+fi
+
+# Complete the current queue entry
+complete_current_queue_entry() {
+    local status="${1:-completed}"
+
+    if [ -z "$QUEUE_ENTRY_ID" ]; then
+        return 0
+    fi
+
+    if type complete_ralph_queue_entry &>/dev/null; then
+        if complete_ralph_queue_entry "$QUEUE_ENTRY_ID" "$status"; then
+            log "Queue entry $QUEUE_ENTRY_ID marked as $status"
+        else
+            log "Warning: Failed to update queue entry status"
+        fi
+    fi
+}
+
+# Check queue and start next PRD if available
+check_and_continue_queue() {
+    if [ "$QUEUE_MODE" != "1" ]; then
+        return 1
+    fi
+
+    # Complete current entry if any
+    complete_current_queue_entry "completed"
+
+    log "Queue mode: Checking for next PRD in queue..."
+
+    if ! type claim_ralph_queue_entry &>/dev/null; then
+        log "Queue functions not available"
+        return 1
+    fi
+
+    local next_entry
+    next_entry=$(claim_ralph_queue_entry "$INSTANCE_ID" 2>/dev/null) || {
+        log "No more entries in queue"
+        return 1
+    }
+
+    local next_prd next_project next_entry_id
+    next_prd=$(echo "$next_entry" | jq -r '.prdPath')
+    next_project=$(echo "$next_entry" | jq -r '.projectRoot')
+    next_entry_id=$(echo "$next_entry" | jq -r '.id')
+
+    if [ -z "$next_prd" ] || [ "$next_prd" = "null" ]; then
+        log "Invalid queue entry"
+        return 1
+    fi
+
+    log "Found next PRD in queue: $next_prd"
+    log "Project: $next_project"
+    log "Entry ID: $next_entry_id"
+
+    echo ""
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║     QUEUE MODE: Starting next PRD                     ║${NC}"
+    echo -e "${CYAN}╠═══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║  Project: $(printf "%-42s" "$(basename "$next_project")") ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    # Execute new ralph instance for the queued PRD
+    exec "$SCRIPT_DIR/ralph.sh" \
+        --prd "$next_prd" \
+        --project "$next_project" \
+        --queue-mode \
+        --queue-entry "$next_entry_id" \
+        "$MAX_ITERATIONS"
+}
+
+# Handle queue entry failure
+handle_queue_failure() {
+    if [ -n "$QUEUE_ENTRY_ID" ]; then
+        complete_current_queue_entry "failed"
+    fi
+}
+
+# =============================================================================
 # SIGNAL HANDLING (US-011)
 # =============================================================================
 
@@ -816,6 +917,11 @@ main() {
             echo -e "${GREEN}✅ All stories complete! Exiting successfully.${NC}"
             log "All stories complete at iteration $i"
             update_status "completed" ""
+
+            # In queue mode, check for next PRD
+            if [ "$QUEUE_MODE" = "1" ]; then
+                check_and_continue_queue || exit 0
+            fi
             exit 0
         fi
 
@@ -826,6 +932,11 @@ main() {
             if all_stories_complete; then
                 echo -e "${GREEN}✅ All stories complete! Exiting successfully.${NC}"
                 update_status "completed" ""
+
+                # In queue mode, check for next PRD
+                if [ "$QUEUE_MODE" = "1" ]; then
+                    check_and_continue_queue || exit 0
+                fi
                 exit 0
             else
                 log "Stories remain but none available. Another instance may be working. Waiting for next iteration..."
@@ -917,6 +1028,11 @@ main() {
             echo -e "${NC}"
             log "✅ Done! All stories complete at iteration $i"
             update_status "completed" ""
+
+            # In queue mode, check for next PRD
+            if [ "$QUEUE_MODE" = "1" ]; then
+                check_and_continue_queue || exit 0
+            fi
             exit 0
         fi
 
@@ -929,6 +1045,11 @@ main() {
             echo -e "${NC}"
             log "✅ Done! All stories verified complete at iteration $i"
             update_status "completed" ""
+
+            # In queue mode, check for next PRD
+            if [ "$QUEUE_MODE" = "1" ]; then
+                check_and_continue_queue || exit 0
+            fi
             exit 0
         fi
 

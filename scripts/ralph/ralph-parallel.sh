@@ -56,10 +56,6 @@ JOBS_FILE="$INSTANCES_DIR/running-jobs.json"
 MAX_INSTANCES="${RALPH_MAX_INSTANCES:-8}"
 DEFAULT_ITERATIONS="${RALPH_ITERATIONS:-10}"
 
-# Path options (set by parse_args)
-PRD_PATH=""
-PROJECT_PATH=""
-
 # =============================================================================
 # UTILITY FUNCTIONS
 # =============================================================================
@@ -123,20 +119,19 @@ show_help() {
     echo "  kill                 Force kill all instances (SIGKILL)"
     echo "  status               Show running instances"
     echo "  dashboard            Open monitoring dashboard"
+    echo "  queue <subcommand>   Queue management (add, list, status, clear)"
     echo "  help                 Show this help"
     echo ""
     write_colored yellow "Options:"
     echo "  -c, --count N        Number of instances (default: CPU cores / 2)"
     echo "  -m, --max-iterations Max iterations per instance (default: 10)"
-    echo "  -p, --prd PATH       Path to prd.json file"
-    echo "  -r, --project PATH   Project root directory"
     echo ""
     write_colored yellow "Examples:"
     echo "  ./ralph-parallel.sh start -c 3"
-    echo "  ./ralph-parallel.sh start -p /path/to/prd.json -c 2"
-    echo "  ./ralph-parallel.sh start -p /project/prd.json -r /project"
     echo "  ./ralph-parallel.sh stop"
     echo "  ./ralph-parallel.sh status"
+    echo "  ./ralph-parallel.sh queue add -p /project/prd.json -r /project"
+    echo "  ./ralph-parallel.sh queue list"
     echo ""
     write_colored yellow "Environment Variables:"
     echo "  RALPH_MAX_INSTANCES  Maximum instances allowed (default: 8)"
@@ -147,8 +142,6 @@ show_help() {
 cmd_start() {
     local count="$1"
     local max_iterations="$2"
-    local prd_path="$3"
-    local project_path="$4"
 
     # Default count to CPU cores / 2
     if [[ -z "$count" || "$count" -le 0 ]]; then
@@ -158,22 +151,6 @@ cmd_start() {
     # Default max iterations
     if [[ -z "$max_iterations" || "$max_iterations" -le 0 ]]; then
         max_iterations="$DEFAULT_ITERATIONS"
-    fi
-
-    # Validate PRD path if provided
-    if [[ -n "$prd_path" ]]; then
-        if [[ ! -f "$prd_path" ]]; then
-            write_colored red "Error: PRD file not found: $prd_path"
-            exit 1
-        fi
-    fi
-
-    # Validate project path if provided
-    if [[ -n "$project_path" ]]; then
-        if [[ ! -d "$project_path" ]]; then
-            write_colored red "Error: Project directory not found: $project_path"
-            exit 1
-        fi
     fi
 
     # Enforce max instances
@@ -188,12 +165,6 @@ cmd_start() {
     write_colored blue "$(printf '═%.0s' {1..55})"
     echo ""
     echo "Launching $count instances with $max_iterations iterations each..."
-    if [[ -n "$prd_path" ]]; then
-        echo "PRD file: $prd_path"
-    fi
-    if [[ -n "$project_path" ]]; then
-        echo "Project root: $project_path"
-    fi
     echo ""
 
     local ralph_script="$SCRIPT_DIR/ralph.sh"
@@ -205,16 +176,6 @@ cmd_start() {
     ensure_instances_dir
     local jobs_json="[]"
 
-    # Build command arguments array
-    local ralph_args=()
-    if [[ -n "$prd_path" ]]; then
-        ralph_args+=("-p" "$prd_path")
-    fi
-    if [[ -n "$project_path" ]]; then
-        ralph_args+=("-r" "$project_path")
-    fi
-    ralph_args+=("$max_iterations")
-
     for ((i = 1; i <= count; i++)); do
         write_colored cyan "  Starting instance $i/$count..."
 
@@ -225,7 +186,7 @@ cmd_start() {
 
         # Launch in background
         local log_file="$INSTANCES_DIR/parallel-$i-$$.log"
-        "$ralph_script" "${ralph_args[@]}" > "$log_file" 2>&1 &
+        "$ralph_script" "$max_iterations" > "$log_file" 2>&1 &
         local pid=$!
 
         # Record job info
@@ -446,20 +407,17 @@ parse_args() {
                 command="$1"
                 shift
                 ;;
+            queue)
+                # Delegate immediately to ralph-queue.sh with remaining args
+                shift
+                exec "$SCRIPT_DIR/ralph-queue.sh" "$@"
+                ;;
             -c|--count)
                 count="$2"
                 shift 2
                 ;;
             -m|--max-iterations)
                 max_iterations="$2"
-                shift 2
-                ;;
-            -p|--prd)
-                PRD_PATH="$2"
-                shift 2
-                ;;
-            -r|--project)
-                PROJECT_PATH="$2"
                 shift 2
                 ;;
             -h|--help)
@@ -486,7 +444,7 @@ parse_args() {
     # Execute command
     case "$command" in
         start)
-            cmd_start "$count" "$max_iterations" "$PRD_PATH" "$PROJECT_PATH"
+            cmd_start "$count" "$max_iterations"
             ;;
         stop)
             cmd_stop
