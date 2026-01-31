@@ -272,6 +272,8 @@ start_heartbeat() {
                 local current_state=$(jq -r '.state // "working"' "$STATUS_FILE" 2>/dev/null)
                 local current_story=$(jq -r '.currentStory // ""' "$STATUS_FILE" 2>/dev/null)
                 update_status "$current_state" "$current_story"
+                # Re-register in global registry if symlink was removed (GM-004)
+                ensure_global_registration
             fi
         done
     ) &
@@ -650,6 +652,31 @@ unregister_ralph_global_instance() {
         # Use rm -rf for Windows compatibility (ln -s may create directories)
         rm -rf "$link_path" 2>/dev/null && log "Unregistered from global registry" || true
     fi
+}
+
+# ensure_global_registration()
+# Re-creates global symlink if it was removed (by cleanup or manually)
+# Called during heartbeat to maintain global registry consistency
+#
+ensure_global_registration() {
+    [[ "${RALPH_GLOBAL_DISABLE:-0}" == "1" ]] && return 0
+
+    local link_path="$(get_ralph_global_dir)/instances/$(get_ralph_global_link_name)"
+
+    # Only recreate if symlink is missing but instance directory exists
+    if [[ ! -L "$link_path" && ! -e "$link_path" ]] && [[ -d "$INSTANCE_DIR" ]]; then
+        # Silently re-register (don't spam logs)
+        local global_dir instances_dir
+        global_dir=$(get_ralph_global_dir)
+        instances_dir="$global_dir/instances"
+
+        # Ensure directory exists
+        [[ -d "$instances_dir" ]] || mkdir -p "$instances_dir" 2>/dev/null || return 1
+
+        # Create symlink
+        ln -s "$INSTANCE_DIR" "$link_path" 2>/dev/null || return 1
+    fi
+    return 0
 }
 
 # =============================================================================

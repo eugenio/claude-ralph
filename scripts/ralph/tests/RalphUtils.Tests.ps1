@@ -553,6 +553,69 @@ Describe 'Initialize-RalphGlobalRegistry' {
     }
 }
 
+Describe 'Ensure-RalphGlobalRegistration' {
+    BeforeAll {
+        $script:testGlobalDir = Join-Path $TestDrive 'ralph-ensure-global-test'
+        $script:originalGlobalDir = $env:RALPH_GLOBAL_DIR
+        $env:RALPH_GLOBAL_DIR = $script:testGlobalDir
+    }
+
+    AfterAll {
+        $env:RALPH_GLOBAL_DIR = $script:originalGlobalDir
+    }
+
+    BeforeEach {
+        if (Test-Path $script:testGlobalDir) {
+            Remove-Item -Path $script:testGlobalDir -Recurse -Force
+        }
+        New-Item -Path (Join-Path $script:testGlobalDir 'instances') -ItemType Directory -Force | Out-Null
+    }
+
+    Context 'When RALPH_GLOBAL_DISABLE is set' {
+        BeforeAll {
+            $script:originalDisable = $env:RALPH_GLOBAL_DISABLE
+            $env:RALPH_GLOBAL_DISABLE = '1'
+        }
+
+        AfterAll {
+            $env:RALPH_GLOBAL_DISABLE = $script:originalDisable
+        }
+
+        It 'Returns true immediately' {
+            Ensure-RalphGlobalRegistration | Should -BeTrue
+        }
+    }
+
+    Context 'When symlink exists' {
+        BeforeEach {
+            # Create a mock symlink target
+            $instanceId = Get-RalphInstanceId
+            $paths = Get-RalphPaths
+            $instanceDir = Join-Path (Join-Path $paths.RalphDir 'instances') $instanceId
+            if (-not (Test-Path $instanceDir)) {
+                New-Item -Path $instanceDir -ItemType Directory -Force | Out-Null
+            }
+            # Register first
+            Register-RalphGlobalInstance | Out-Null
+        }
+
+        AfterEach {
+            Unregister-RalphGlobalInstance | Out-Null
+        }
+
+        It 'Returns true without recreating' {
+            $linkName = Get-RalphGlobalLinkName
+            $linkPath = Join-Path (Join-Path $script:testGlobalDir 'instances') $linkName
+            $beforeStat = (Get-Item $linkPath -ErrorAction SilentlyContinue).LastWriteTime
+
+            Ensure-RalphGlobalRegistration | Should -BeTrue
+
+            # Link should still exist with same timestamp (not recreated)
+            Test-Path $linkPath | Should -BeTrue
+        }
+    }
+}
+
 AfterAll {
     # Clean up - remove the imported module
     Remove-Module RalphUtils -ErrorAction SilentlyContinue

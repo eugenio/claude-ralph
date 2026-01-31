@@ -731,6 +731,9 @@ function Update-RalphStatus {
             Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
         }
     }
+
+    # Re-register in global registry if symlink was removed (GM-004)
+    $null = Ensure-RalphGlobalRegistration
 }
 
 <#
@@ -2249,6 +2252,72 @@ function Unregister-RalphGlobalInstance {
 
 <#
 .SYNOPSIS
+    Ensures the instance is registered in the global registry.
+
+.DESCRIPTION
+    Re-creates the global symlink if it was removed (by cleanup or manually).
+    Called during status updates to maintain global registry consistency.
+    Silently re-registers without spamming logs.
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if registration is valid or was restored.
+
+.EXAMPLE
+    Ensure-RalphGlobalRegistration
+#>
+function Ensure-RalphGlobalRegistration {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    # Skip if disabled
+    if ($env:RALPH_GLOBAL_DISABLE -eq '1') {
+        return $true
+    }
+
+    $globalDir = Get-RalphGlobalDir
+    $instancesDir = Join-Path $globalDir 'instances'
+    $linkName = Get-RalphGlobalLinkName
+    $linkPath = Join-Path $instancesDir $linkName
+
+    # Get the local instance directory
+    $instanceId = Get-RalphInstanceId
+    $paths = Get-RalphPaths
+    $instanceDir = Join-Path (Join-Path $paths.RalphDir 'instances') $instanceId
+
+    # Only recreate if symlink is missing but instance directory exists
+    if (-not (Test-Path $linkPath) -and (Test-Path $instanceDir)) {
+        # Ensure directory exists
+        if (-not (Test-Path $instancesDir)) {
+            try {
+                New-Item -Path $instancesDir -ItemType Directory -Force | Out-Null
+            }
+            catch {
+                return $false
+            }
+        }
+
+        # Create link (junction on Windows, symlink on Unix) - silently
+        try {
+            if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+                New-Item -ItemType Junction -Path $linkPath -Target $instanceDir -Force | Out-Null
+            }
+            else {
+                New-Item -ItemType SymbolicLink -Path $linkPath -Target $instanceDir -Force | Out-Null
+            }
+            return $true
+        }
+        catch {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+<#
+.SYNOPSIS
     Cleans up stale global registry entries.
 
 .DESCRIPTION
@@ -2586,6 +2655,7 @@ Export-ModuleMember -Function @(
     'Get-RalphGlobalLinkName'
     'Register-RalphGlobalInstance'
     'Unregister-RalphGlobalInstance'
+    'Ensure-RalphGlobalRegistration'
     'Get-RalphGlobalInstances'
     'Clear-RalphGlobalRegistry'
     # Multi-project dashboard functions

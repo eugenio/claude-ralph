@@ -836,3 +836,37 @@ EOF
     [[ "$status" -eq 0 ]]
     unset RALPH_GLOBAL_DIR
 }
+
+@test "ensure_global_registration() returns success when disabled" {
+    export RALPH_GLOBAL_DISABLE=1
+    run ensure_global_registration
+    [[ "$status" -eq 0 ]]
+    unset RALPH_GLOBAL_DISABLE
+}
+
+@test "ensure_global_registration() recreates missing symlink" {
+    export RALPH_GLOBAL_DIR="$TEST_TEMP_DIR/global"
+    export RALPH_PROJECT_ROOT="$TEST_TEMP_DIR/project"
+
+    mkdir -p "$RALPH_GLOBAL_DIR/instances"
+    mkdir -p "$RALPH_PROJECT_ROOT/ralph/instances"
+
+    # Create instance directory
+    instance_id=$(get_ralph_instance_id)
+    local_instance_dir="$RALPH_PROJECT_ROOT/ralph/instances/$instance_id"
+    mkdir -p "$local_instance_dir"
+
+    # Ensure symlink doesn't exist
+    link_name=$(get_ralph_global_link_name)
+    link_path="$RALPH_GLOBAL_DIR/instances/$link_name"
+    [[ ! -L "$link_path" ]]
+
+    # Run ensure - should create symlink
+    run ensure_global_registration
+    [[ "$status" -eq 0 ]]
+
+    # Verify symlink was created
+    [[ -L "$link_path" ]]
+
+    unset RALPH_GLOBAL_DIR RALPH_PROJECT_ROOT
+}

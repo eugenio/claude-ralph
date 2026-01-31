@@ -166,6 +166,45 @@ unregister_ralph_global_instance() {
     return 0
 }
 
+# ensure_global_registration()
+# Re-creates global symlink if it was removed (by cleanup or manually)
+# Called during heartbeat to maintain global registry consistency
+# Returns: 0 on success, 1 on failure
+#
+ensure_global_registration() {
+    # Skip if disabled
+    if [[ "${RALPH_GLOBAL_DISABLE:-}" == "1" ]]; then
+        return 0
+    fi
+
+    local global_dir
+    global_dir=$(get_ralph_global_dir)
+    local link_name
+    link_name=$(get_ralph_global_link_name)
+    local link_path="$global_dir/instances/$link_name"
+
+    # Get the local instance directory
+    eval "$(get_ralph_paths)"
+    local instance_id
+    instance_id=$(get_ralph_instance_id)
+    local instance_dir="$INSTANCES_DIR/$instance_id"
+
+    # Only recreate if symlink is missing but instance directory exists
+    if [[ ! -L "$link_path" && ! -e "$link_path" ]] && [[ -d "$instance_dir" ]]; then
+        local instances_dir="$global_dir/instances"
+
+        # Ensure directory exists
+        if [[ ! -d "$instances_dir" ]]; then
+            mkdir -p "$instances_dir" 2>/dev/null || return 1
+        fi
+
+        # Create symlink (silently, don't spam logs)
+        ln -s "$instance_dir" "$link_path" 2>/dev/null || return 1
+    fi
+
+    return 0
+}
+
 # get_ralph_global_instances()
 # Returns JSON array of all instances from the global registry
 # This allows dashboards to see instances across all projects
