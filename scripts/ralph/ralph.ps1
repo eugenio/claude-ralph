@@ -240,16 +240,23 @@ function Invoke-ClaudeCode {
     #>
     param(
         [string]$PromptPath,
-        [string]$ProjectRoot
+        [string]$ProjectRoot,
+        [string]$StoryId,
+        [string]$PrdFile
     )
 
-    Write-ColoredOutput 'Running Claude Code...' -Color Yellow
+    Write-ColoredOutput "Running Claude Code for $StoryId..." -Color Yellow
 
     # Read the prompt content
     $promptContent = Get-Content -Path $PromptPath -Raw -ErrorAction Stop
 
     # Save current location
     $originalLocation = Get-Location
+
+    # Export story context for Claude to use
+    $env:RALPH_STORY_ID = $StoryId
+    $env:RALPH_PROJECT_ROOT = $ProjectRoot
+    $env:RALPH_PRD_FILE = $PrdFile
 
     try {
         # Change to project root
@@ -282,6 +289,10 @@ function Invoke-ClaudeCode {
     }
     finally {
         Set-Location -Path $originalLocation
+        # Clean up environment variables
+        Remove-Item Env:RALPH_STORY_ID -ErrorAction SilentlyContinue
+        Remove-Item Env:RALPH_PROJECT_ROOT -ErrorAction SilentlyContinue
+        Remove-Item Env:RALPH_PRD_FILE -ErrorAction SilentlyContinue
     }
 }
 
@@ -409,7 +420,7 @@ function Main {
 
         # Run Claude Code
         try {
-            $result = Invoke-ClaudeCode -PromptPath $paths.PromptFile -ProjectRoot $paths.ProjectRoot
+            $result = Invoke-ClaudeCode -PromptPath $paths.PromptFile -ProjectRoot $paths.ProjectRoot -StoryId $story.id -PrdFile $paths.PrdFile
 
             if ($result.ExitCode -ne 0) {
                 Add-RalphInstanceLog "Claude Code exited with code $($result.ExitCode)"

@@ -851,6 +851,11 @@ main() {
         # Start background heartbeat to keep instance alive during long Claude runs
         start_heartbeat
 
+        # Export story context for Claude to use
+        export RALPH_STORY_ID="$CURRENT_STORY_ID"
+        export RALPH_PROJECT_ROOT="$PROJECT_ROOT"
+        export RALPH_PRD_FILE="$PRD_FILE"
+
         cd "$PROJECT_ROOT"
         # Use tee to log file; only copy to stderr if it's available (not in background mode)
         local tee_target="$INSTANCE_DIR/claude-output.log"
