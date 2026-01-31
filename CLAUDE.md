@@ -100,10 +100,17 @@ your-project/
 │       ├── ralph-cleanup.ps1    # Instance cleanup (PowerShell)
 │       ├── ralph-locks.sh       # Lock management (Bash)
 │       ├── ralph-locks.ps1      # Lock management (PowerShell)
+│       ├── ralph-queue.sh       # Queue CLI (Bash)
+│       ├── ralph-queue.ps1      # Queue CLI (PowerShell)
+│       ├── ralph-queue-workers.sh   # Queue workers (Bash)
+│       ├── ralph-queue-workers.ps1  # Queue workers (PowerShell)
+│       ├── ralph-supervisor.sh  # Process supervisor (Bash)
+│       ├── ralph-supervisor.ps1 # Process supervisor (PowerShell)
 │       ├── install-skills.sh    # Skill installer (Bash)
 │       ├── install-skills.ps1   # Skill installer (PowerShell)
 │       ├── ralph-utils.sh       # Shared Bash utilities
 │       ├── RalphUtils.psm1      # Shared PowerShell module
+│       ├── RalphQueue.psm1      # Queue functions module (PowerShell)
 │       ├── prompt.md            # Instructions for each iteration
 │       ├── prd.json             # User stories with passes status
 │       ├── progress.txt         # Append-only learnings log
@@ -129,6 +136,9 @@ Ralph can register instances in a global registry for cross-project monitoring:
 ├── instances/                     # Symlinks to active instances
 │   ├── projectA-user-host-123-*  # Symlink to project A instance
 │   └── projectB-user-host-456-*  # Symlink to project B instance
+├── queue.json                     # Cross-project PRD queue
+├── queue-workers.json             # Active queue workers
+├── logs/                          # Queue worker logs
 └── locks/                         # Global lock files (reserved)
 ```
 
@@ -312,6 +322,108 @@ export RALPH_LOCK_TIMEOUT=3600
 # Enable debug logging
 export RALPH_DEBUG=1
 ```
+
+## Multi-Project Queue
+
+Ralph supports queuing PRDs from multiple projects. Workers automatically pick up the next queued PRD when they complete their current work, enabling continuous cross-project automation.
+
+### Queue Management (Bash)
+
+```bash
+# Add PRDs to the queue
+./scripts/ralph/ralph-queue.sh add -p /project1/prd.json -r /project1
+./scripts/ralph/ralph-queue.sh add -p /project2/prd.json -r /project2 --priority 1
+
+# List queue entries
+./scripts/ralph/ralph-queue.sh list
+./scripts/ralph/ralph-queue.sh list -s pending  # Filter by status
+
+# Show queue summary
+./scripts/ralph/ralph-queue.sh status
+
+# Remove an entry
+./scripts/ralph/ralph-queue.sh remove -i <entry-id>
+
+# Clear completed entries
+./scripts/ralph/ralph-queue.sh clear
+
+# Start workers to process queue
+./scripts/ralph/ralph-queue.sh start -c 3 -m 10
+```
+
+### Queue Management (PowerShell)
+
+```powershell
+# Add PRDs to the queue
+./ralph-queue.ps1 add -p /project1/prd.json -r /project1
+./ralph-queue.ps1 add -p /project2/prd.json -r /project2 -Priority 1
+
+# List queue entries
+./ralph-queue.ps1 list
+./ralph-queue.ps1 list -Status pending
+
+# Show queue summary
+./ralph-queue.ps1 status
+
+# Remove an entry
+./ralph-queue.ps1 remove -Id <entry-id>
+
+# Clear completed entries
+./ralph-queue.ps1 clear
+
+# Start workers to process queue
+./ralph-queue.ps1 start -c 3 -m 10
+```
+
+### Queue Workers
+
+For dedicated worker management:
+
+```bash
+# Bash
+./scripts/ralph/ralph-queue-workers.sh start -c 3 -m 10
+./scripts/ralph/ralph-queue-workers.sh status
+./scripts/ralph/ralph-queue-workers.sh stop
+./scripts/ralph/ralph-queue-workers.sh kill  # Force kill
+```
+
+```powershell
+# PowerShell
+./ralph-queue-workers.ps1 start -c 3 -m 10
+./ralph-queue-workers.ps1 status
+./ralph-queue-workers.ps1 stop
+./ralph-queue-workers.ps1 kill  # Force kill
+```
+
+### Queue Entry Structure
+
+```json
+{
+  "id": "q-1706745600-abc12345",
+  "prdPath": "/absolute/path/to/prd.json",
+  "projectRoot": "/absolute/path/to/project",
+  "priority": 10,
+  "status": "pending",
+  "addedAt": "2024-02-01T12:00:00Z",
+  "claimedBy": null,
+  "claimedAt": null,
+  "completedAt": null
+}
+```
+
+**Status Values:**
+- `pending` - Waiting in queue
+- `active` - Being processed by a worker
+- `completed` - All stories finished successfully
+- `failed` - Error occurred during processing
+
+### Queue-Aware Workers
+
+When started with `-QueueMode`, ralph workers automatically:
+1. Process their assigned PRD
+2. Mark the queue entry as completed/failed
+3. Claim the next pending entry from the queue
+4. Continue until the queue is empty
 
 ## Skills
 
