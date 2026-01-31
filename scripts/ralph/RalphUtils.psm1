@@ -2247,6 +2247,99 @@ function Unregister-RalphGlobalInstance {
     return $true
 }
 
+<#
+.SYNOPSIS
+    Cleans up stale global registry entries.
+
+.DESCRIPTION
+    Removes global registry symlinks/junctions that point to:
+    - Non-existent instance directories
+    - Completed projects (all stories pass)
+    - Dead instances with no recent heartbeat
+
+.PARAMETER IncludeCompleted
+    If specified, removes entries for fully completed projects.
+
+.OUTPUTS
+    System.Int32
+    Number of entries cleaned up.
+
+.EXAMPLE
+    $count = Clear-RalphGlobalRegistry -IncludeCompleted
+    Write-Host "Cleaned $count stale entries"
+#>
+function Clear-RalphGlobalRegistry {
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter()]
+        [switch]$IncludeCompleted
+    )
+
+    $globalDir = Get-RalphGlobalDir
+    $instancesDir = Join-Path $globalDir 'instances'
+
+    if (-not (Test-Path $instancesDir)) {
+        return 0
+    }
+
+    $cleaned = 0
+    Get-ChildItem -Path $instancesDir -ErrorAction SilentlyContinue | ForEach-Object {
+        $link = $_
+        $shouldRemove = $false
+        $reason = ''
+
+        # Check if it's a valid link
+        if ($link.LinkType -in @('SymbolicLink', 'Junction')) {
+            $target = $link.Target
+
+            # Check if target exists
+            if (-not (Test-Path $target)) {
+                $shouldRemove = $true
+                $reason = 'target missing'
+            }
+            elseif ($IncludeCompleted) {
+                # Extract project root from target path
+                $projectRoot = $null
+                if ($target -match '^(.+)[/\\]scripts[/\\]ralph[/\\]instances[/\\]') { $projectRoot = $Matches[1] }
+                elseif ($target -match '^(.+)[/\\]\.claude[/\\]ralph[/\\]instances[/\\]') { $projectRoot = $Matches[1] }
+                elseif ($target -match '^(.+)[/\\]project[/\\]instances[/\\]') { $projectRoot = $Matches[1] }
+                elseif ($target -match '^(.+)[/\\]tasks[/\\]instances[/\\]') { $projectRoot = $Matches[1] }
+                elseif ($target -match '^(.+)[/\\]instances[/\\]') { $projectRoot = $Matches[1] }
+
+                if ($projectRoot -and (Test-Path $projectRoot)) {
+                    $status = Get-ProjectPrdStatus -ProjectRoot $projectRoot
+                    if ($status.Total -gt 0 -and $status.Complete -eq $status.Total) {
+                        $shouldRemove = $true
+                        $reason = 'project completed'
+                    }
+                }
+            }
+        }
+        else {
+            # Not a symlink/junction - might be stale directory
+            $statusFile = Join-Path $link.FullName 'status.json'
+            if (-not (Test-Path $statusFile)) {
+                $shouldRemove = $true
+                $reason = 'no status file'
+            }
+        }
+
+        if ($shouldRemove) {
+            try {
+                Remove-Item -Path $link.FullName -Force -Recurse -ErrorAction Stop
+                Write-Verbose "Removed stale registry entry: $($link.Name) ($reason)"
+                $cleaned++
+            }
+            catch {
+                Write-Warning "Failed to remove $($link.Name): $_"
+            }
+        }
+    }
+
+    return $cleaned
+}
+
 # =============================================================================
 # MULTI-PROJECT DASHBOARD FUNCTIONS
 # =============================================================================
@@ -2330,13 +2423,21 @@ function Get-AllProjectsPrdStatus {
         if (-not $pr -or -not (Test-Path $pr)) { continue }
         $name = Split-Path -Path $pr -Leaf
         $status = Get-ProjectPrdStatus -ProjectRoot $pr
+        $isComplete = ($status.Total -gt 0) -and ($status.Complete -eq $status.Total)
+        $remaining = $status.Total - $status.Complete
         $results += @{
             Name = $name
             Total = $status.Total
             Complete = $status.Complete
             Root = $pr
+            IsComplete = $isComplete
+            Remaining = $remaining
         }
     }
+    # Sort: incomplete projects first (by remaining work desc), then complete projects
+    $results = $results | Sort-Object -Property @{Expression={$_.IsComplete}; Ascending=$true}, @{Expression={$_.Remaining}; Descending=$true}
+    # Filter out fully completed projects (no remaining work)
+    $results = $results | Where-Object { -not $_.IsComplete }
     return $results
 }
 
@@ -2442,6 +2543,7 @@ Export-ModuleMember -Function @(
     'Register-RalphGlobalInstance'
     'Unregister-RalphGlobalInstance'
     'Get-RalphGlobalInstances'
+    'Clear-RalphGlobalRegistry'
     # Multi-project dashboard functions
     'Get-ProjectPrdStatus'
     'Get-AllProjectsPrdStatus'

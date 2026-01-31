@@ -119,6 +119,22 @@ function Update-SectionLimits {
         $script:MaxInstances = $instanceCount
         $script:MaxLocks = $lockCount
     } else {
+        # Account for overflow lines ("... and N more") - up to 3 extra lines
+        # Each section that overflows adds 1 line for the overflow message
+        $overflowLines = 0
+
+        # First pass: estimate limits to check for overflow
+        $estProjects = [Math]::Max(1, [int]($available * $projectCount / $totalNeeded))
+        $estInstances = [Math]::Max(1, [int]($available * $instanceCount / $totalNeeded))
+        $estLocks = [Math]::Max(1, $available - $estProjects - $estInstances)
+
+        if ($projectCount -gt $estProjects) { $overflowLines++ }
+        if ($instanceCount -gt $estInstances) { $overflowLines++ }
+        if ($lockCount -gt $estLocks) { $overflowLines++ }
+
+        # Reduce available space by overflow lines
+        $available = [Math]::Max(3, $available - $overflowLines)
+
         # Distribute proportionally based on content
         $script:MaxProjects = [Math]::Max(1, [int]($available * $projectCount / $totalNeeded))
         $script:MaxInstances = [Math]::Max(1, [int]($available * $instanceCount / $totalNeeded))
@@ -416,6 +432,11 @@ function Show-LocksDetail {
 function Invoke-Cleanup {
     Clear-Host
     & (Join-Path $PSScriptRoot 'ralph-cleanup.ps1') -Dead -Terminated
+    # Also clean up global registry entries for completed projects
+    $registryCleaned = Clear-RalphGlobalRegistry -IncludeCompleted
+    if ($registryCleaned -gt 0) {
+        Write-Host "Cleaned $registryCleaned completed project entries from global registry" -ForegroundColor Green
+    }
     Write-Host ''
     Write-Host 'Press any key to return to dashboard...' -ForegroundColor Gray
     $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
@@ -475,6 +496,9 @@ function Invoke-AutoCleanup {
 
         $cleaned++
     }
+
+    # Also clean up global registry entries for completed projects
+    $cleaned += Clear-RalphGlobalRegistry -IncludeCompleted
 
     return $cleaned
 }

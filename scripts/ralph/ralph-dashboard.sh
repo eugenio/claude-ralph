@@ -111,6 +111,27 @@ calculate_section_limits() {
         MAX_INSTANCES=$instance_count
         MAX_LOCKS=$lock_count
     else
+        # Account for overflow lines ("... and N more") - up to 3 extra lines
+        # Each section that overflows adds 1 line for the overflow message
+        local overflow_lines=0
+
+        # First pass: estimate limits to check for overflow
+        local est_projects=$((available * project_count / total_needed))
+        local est_instances=$((available * instance_count / total_needed))
+        local est_locks=$((available - est_projects - est_instances))
+
+        [[ "$est_projects" -lt 1 ]] && est_projects=1 || true
+        [[ "$est_instances" -lt 1 ]] && est_instances=1 || true
+        [[ "$est_locks" -lt 1 ]] && est_locks=1 || true
+
+        [[ "$project_count" -gt "$est_projects" ]] && ((overflow_lines++)) || true
+        [[ "$instance_count" -gt "$est_instances" ]] && ((overflow_lines++)) || true
+        [[ "$lock_count" -gt "$est_locks" ]] && ((overflow_lines++)) || true
+
+        # Reduce available space by overflow lines
+        available=$((available - overflow_lines))
+        [[ "$available" -lt 3 ]] && available=3 || true
+
         # Distribute proportionally based on content
         MAX_PROJECTS=$((available * project_count / total_needed))
         MAX_INSTANCES=$((available * instance_count / total_needed))
@@ -352,14 +373,25 @@ get_all_projects_prd_status() {
     result="[]"
     while IFS= read -r pr; do
         [[ -z "$pr" || ! -d "$pr" ]] && continue
-        local name status total complete
+        local name status total complete is_complete remaining
         name=$(basename "$pr")
         status=$(get_project_prd_status "$pr")
         total=$(echo "$status" | jq -r '.total')
         complete=$(echo "$status" | jq -r '.complete')
+        # Track completion status for sorting
+        if [[ "$total" -gt 0 && "$complete" -eq "$total" ]]; then
+            is_complete="true"
+        else
+            is_complete="false"
+        fi
+        remaining=$((total - complete))
         result=$(echo "$result" | jq --arg n "$name" --argjson t "$total" --argjson c "$complete" --arg r "$pr" \
-            '. + [{name:$n,total:$t,complete:$c,root:$r}]')
+            --argjson ic "$is_complete" --argjson rem "$remaining" \
+            '. + [{name:$n,total:$t,complete:$c,root:$r,isComplete:$ic,remaining:$rem}]')
     done <<< "$all_roots"
+    # Sort: incomplete projects first (by remaining work desc), then complete projects
+    # Filter out fully completed projects (no remaining work)
+    result=$(echo "$result" | jq '[.[] | select(.isComplete == false)] | sort_by(-.remaining)')
     echo "$result"
 }
 
@@ -748,12 +780,72 @@ show_locks_detail() {
     read -rsn1
 }
 
+# clear_global_registry_completed()
+# Cleans up global registry entries for completed projects
+#
+clear_global_registry_completed() {
+    local global_dir="${RALPH_GLOBAL_DIR:-$HOME/.ralph/global}"
+    local instances_dir="$global_dir/instances"
+    local cleaned=0
+
+    [[ ! -d "$instances_dir" ]] && echo 0 && return
+
+    for link in "$instances_dir"/*; do
+        [[ -L "$link" ]] || continue
+        local target should_remove=false
+
+        target=$(readlink "$link" 2>/dev/null) || continue
+
+        # Check if target exists
+        if [[ ! -d "$target" ]]; then
+            should_remove=true
+        else
+            # Extract project root from target path
+            local project_root=""
+            if [[ "$target" == */scripts/ralph/instances/* ]]; then
+                project_root="${target%%/scripts/ralph/instances/*}"
+            elif [[ "$target" == */.claude/ralph/instances/* ]]; then
+                project_root="${target%%/.claude/ralph/instances/*}"
+            elif [[ "$target" == */project/instances/* ]]; then
+                project_root="${target%%/project/instances/*}"
+            elif [[ "$target" == */tasks/instances/* ]]; then
+                project_root="${target%%/tasks/instances/*}"
+            elif [[ "$target" == */instances/* ]]; then
+                project_root="${target%%/instances/*}"
+            fi
+
+            if [[ -n "$project_root" && -d "$project_root" ]]; then
+                local status total complete
+                status=$(get_project_prd_status "$project_root")
+                total=$(echo "$status" | jq -r '.total')
+                complete=$(echo "$status" | jq -r '.complete')
+
+                if [[ "$total" -gt 0 && "$complete" -eq "$total" ]]; then
+                    should_remove=true
+                fi
+            fi
+        fi
+
+        if [[ "$should_remove" == true ]]; then
+            rm -f "$link" 2>/dev/null && ((cleaned++)) || true
+        fi
+    done
+
+    echo "$cleaned"
+}
+
 # invoke_cleanup()
 # Runs cleanup for dead instances
 #
 invoke_cleanup() {
     clear
     "$SCRIPT_DIR/ralph-cleanup.sh" --dead --terminated
+    # Also clean up global registry entries for completed projects
+    local registry_cleaned
+    registry_cleaned=$(clear_global_registry_completed)
+    if [[ "$registry_cleaned" -gt 0 ]]; then
+        write_colored green "Cleaned $registry_cleaned completed project entries from global registry"
+    fi
     echo ""
     write_colored gray "Press any key to return to dashboard..."
     read -rsn1
