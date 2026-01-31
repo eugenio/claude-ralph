@@ -532,6 +532,39 @@ Describe 'Regression Tests' {
     }
 }
 
+# =============================================================================
+# GET-ALLPROJECTSLOCKS TESTS
+# =============================================================================
+
+Describe 'Get-AllProjectsLocks' {
+    BeforeAll {
+        $script:testGlobalDir = Join-Path $TestDrive 'locks-test-global'
+        $script:originalGlobalDir = $env:RALPH_GLOBAL_DIR
+        $env:RALPH_GLOBAL_DIR = $script:testGlobalDir
+        $instancesDir = Join-Path $script:testGlobalDir 'instances'
+        New-Item -Path $instancesDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        $env:RALPH_GLOBAL_DIR = $script:originalGlobalDir
+    }
+
+    Context 'Stale lock detection' {
+        It 'Returns array or null when no locks exist' {
+            $result = Get-AllProjectsLocks
+            # Result can be $null or empty array when no locks
+            if ($null -ne $result) {
+                $result | Should -BeOfType [array]
+            }
+        }
+
+        It 'Get-AllProjectsLocks function exists in module' {
+            Get-Command Get-AllProjectsLocks -ErrorAction SilentlyContinue |
+                Should -Not -BeNullOrEmpty
+        }
+    }
+}
+
 AfterAll {
     Remove-Module RalphUtils -ErrorAction SilentlyContinue
 }

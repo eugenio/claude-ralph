@@ -128,18 +128,32 @@ function Clear-DeadInstances {
                 $status | ConvertTo-Json -Depth 5 | Set-Content $statusFile -Force
             }
 
-            # Release any global locks
-            $locksDir = Join-Path $globalDir 'locks'
-            if (Test-Path $locksDir) {
-                Get-ChildItem -Path $locksDir -Filter '*.lock' | ForEach-Object {
-                    try {
-                        $lock = Get-Content $_.FullName -Raw | ConvertFrom-Json
-                        if ($lock.owner -eq $instance.instanceId) {
-                            Write-Host "    Releasing lock: $($_.BaseName)" -ForegroundColor Yellow
-                            Remove-Item $_.FullName -Force
+            # Release any locks held by this instance in project-local locks directories
+            $projectRoot = $instance.projectRoot
+            if ($projectRoot -and (Test-Path $projectRoot)) {
+                # Check all possible lock directory locations
+                $locksDirs = @(
+                    (Join-Path $projectRoot 'scripts' 'ralph' 'locks'),
+                    (Join-Path $projectRoot '.claude' 'ralph' 'locks'),
+                    (Join-Path $projectRoot 'ralph' 'locks'),
+                    (Join-Path $projectRoot 'tasks' 'locks'),
+                    (Join-Path $projectRoot 'project' 'locks'),
+                    (Join-Path $projectRoot 'locks')
+                )
+                foreach ($projectLocksDir in $locksDirs) {
+                    if (-not (Test-Path $projectLocksDir)) { continue }
+                    Get-ChildItem -Path $projectLocksDir -Directory -Filter '*.lock' -ErrorAction SilentlyContinue | ForEach-Object {
+                        $lockOwner = $null
+                        $ownerFile = Join-Path $_.FullName 'owner.txt'
+                        $ownerFileLegacy = Join-Path $_.FullName 'owner'
+                        if (Test-Path $ownerFile) { $lockOwner = (Get-Content $ownerFile -Raw).Trim() }
+                        elseif (Test-Path $ownerFileLegacy) { $lockOwner = (Get-Content $ownerFileLegacy -Raw).Trim() }
+                        if ($lockOwner -eq $instance.instanceId) {
+                            $storyId = $_.Name -replace '\.lock$', ''
+                            Write-Host "    Releasing lock: $storyId" -ForegroundColor Yellow
+                            Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
                         }
                     }
-                    catch { }
                 }
             }
 

@@ -410,37 +410,84 @@ get_all_projects_locks() {
     result="[]"
     while IFS= read -r pr; do
         [[ -z "$pr" || ! -d "$pr" ]] && continue
-        local locks_dir=""
+        # Find all possible lock directories for this project
+        local locks_dirs=()
+        local instances_dirs=()
         if [[ -d "$pr/scripts/ralph/locks" ]]; then
-            locks_dir="$pr/scripts/ralph/locks"
-        elif [[ -d "$pr/.claude/ralph/locks" ]]; then
-            locks_dir="$pr/.claude/ralph/locks"
+            locks_dirs+=("$pr/scripts/ralph/locks")
+            instances_dirs+=("$pr/scripts/ralph/instances")
         fi
-        [[ -z "$locks_dir" ]] && continue
+        if [[ -d "$pr/.claude/ralph/locks" ]]; then
+            locks_dirs+=("$pr/.claude/ralph/locks")
+            instances_dirs+=("$pr/.claude/ralph/instances")
+        fi
+        if [[ -d "$pr/ralph/locks" ]]; then
+            locks_dirs+=("$pr/ralph/locks")
+            instances_dirs+=("$pr/ralph/instances")
+        fi
+        if [[ -d "$pr/tasks/locks" ]]; then
+            locks_dirs+=("$pr/tasks/locks")
+            instances_dirs+=("$pr/tasks/instances")
+        fi
+        if [[ -d "$pr/project/locks" ]]; then
+            locks_dirs+=("$pr/project/locks")
+            instances_dirs+=("$pr/project/instances")
+        fi
+        if [[ -d "$pr/locks" ]]; then
+            locks_dirs+=("$pr/locks")
+            instances_dirs+=("$pr/instances")
+        fi
+        [[ ${#locks_dirs[@]} -eq 0 ]] && continue
         local pname now
         pname=$(basename "$pr")
         now=$(date +%s)
-        for lock_dir in "$locks_dir"/*.lock/; do
-            [[ -d "$lock_dir" ]] || continue
-            local sid owner ts age
-            sid=$(basename "$lock_dir" .lock)
-            owner="unknown"; ts=0
-            if [[ -f "$lock_dir/owner.txt" ]]; then
-                owner=$(cat "$lock_dir/owner.txt" | tr -d '\n')
-            elif [[ -f "$lock_dir/owner" ]]; then
-                owner=$(cat "$lock_dir/owner" | tr -d '\n')
-            fi
-            if [[ -f "$lock_dir/timestamp.txt" ]]; then
-                ts=$(cat "$lock_dir/timestamp.txt" | tr -d '\n')
-            elif [[ -f "$lock_dir/timestamp" ]]; then
-                ts=$(cat "$lock_dir/timestamp" | tr -d '\n')
-            fi
-            age=$((now - ts))
-            local is_stale="false"
-            [[ "$age" -gt 7200 ]] && is_stale="true"
-            result=$(echo "$result" | jq --arg s "$sid" --arg o "$owner" --argjson a "$age" \
-                --argjson stale "$is_stale" --arg p "$pname" \
-                '. + [{storyId:$s,owner:$o,age:$a,isStale:$stale,project:$p,isDead:false}]')
+        local idx=0
+        for locks_dir in "${locks_dirs[@]}"; do
+            local instances_dir="${instances_dirs[$idx]}"
+            ((idx++)) || true
+            for lock_dir in "$locks_dir"/*.lock/; do
+                [[ -d "$lock_dir" ]] || continue
+                local sid owner ts age
+                sid=$(basename "$lock_dir" .lock)
+                owner="unknown"; ts=0
+                if [[ -f "$lock_dir/owner.txt" ]]; then
+                    owner=$(cat "$lock_dir/owner.txt" | tr -d '\n')
+                elif [[ -f "$lock_dir/owner" ]]; then
+                    owner=$(cat "$lock_dir/owner" | tr -d '\n')
+                fi
+                if [[ -f "$lock_dir/timestamp.txt" ]]; then
+                    ts=$(cat "$lock_dir/timestamp.txt" | tr -d '\n')
+                elif [[ -f "$lock_dir/timestamp" ]]; then
+                    ts=$(cat "$lock_dir/timestamp" | tr -d '\n')
+                fi
+                age=$((now - ts))
+                local is_stale="false"
+                [[ "$age" -gt 7200 ]] && is_stale="true"
+                # Check if the lock owner instance is dead
+                local is_dead="false"
+                if [[ "$owner" != "unknown" && -n "$instances_dir" ]]; then
+                    local owner_status_file="$instances_dir/$owner/status.json"
+                    if [[ -f "$owner_status_file" ]]; then
+                        local owner_status heartbeat_epoch owner_state heartbeat_age
+                        owner_status=$(cat "$owner_status_file" 2>/dev/null) || true
+                        if [[ -n "$owner_status" ]]; then
+                            heartbeat_epoch=$(echo "$owner_status" | jq -r '.lastHeartbeatEpoch // 0')
+                            owner_state=$(echo "$owner_status" | jq -r '.state // "unknown"')
+                            heartbeat_age=$((now - heartbeat_epoch))
+                            # Dead if no heartbeat > 5 min and not in terminal state
+                            if [[ "$heartbeat_age" -gt 300 && "$owner_state" != "terminated" && "$owner_state" != "completed" ]]; then
+                                is_dead="true"
+                            fi
+                        fi
+                    else
+                        # Instance directory not found - owner is dead/gone
+                        is_dead="true"
+                    fi
+                fi
+                result=$(echo "$result" | jq --arg s "$sid" --arg o "$owner" --argjson a "$age" \
+                    --argjson stale "$is_stale" --arg p "$pname" --argjson dead "$is_dead" \
+                    '. + [{storyId:$s,owner:$o,age:$a,isStale:$stale,project:$p,isDead:$dead}]')
+            done
         done
     done <<< "$all_roots"
     echo "$result"
@@ -834,12 +881,89 @@ clear_global_registry_completed() {
     echo "$cleaned"
 }
 
+# clear_stale_locks_all_projects()
+# Cleans up stale and dead-owner locks from all projects
+# Output: Number of locks cleaned
+#
+clear_stale_locks_all_projects() {
+    local locks_json cleaned=0
+    locks_json=$(get_all_projects_locks 2>/dev/null || echo "[]")
+
+    # Get all project roots from global instances
+    local instances_json project_roots
+    instances_json=$(get_ralph_global_instances "all" 2>/dev/null || echo "[]")
+    project_roots=$(echo "$instances_json" | jq -r '.[].projectRoot // empty' | sort -u)
+
+    # Add local root
+    local local_root
+    local_root=$(get_project_root 2>/dev/null || echo "")
+    if [[ -n "$local_root" ]]; then
+        project_roots=$(printf "%s\n%s" "$project_roots" "$local_root" | sort -u | grep -v '^$')
+    fi
+
+    # Process stale/dead locks
+    while read -r lock; do
+        [[ -z "$lock" ]] && continue
+
+        local story_id is_dead is_stale project_name
+        story_id=$(echo "$lock" | jq -r '.storyId')
+        is_dead=$(echo "$lock" | jq -r '.isDead')
+        is_stale=$(echo "$lock" | jq -r '.isStale')
+        project_name=$(echo "$lock" | jq -r '.project')
+
+        if [[ "$is_dead" == "true" || "$is_stale" == "true" ]]; then
+            local reason
+            if [[ "$is_dead" == "true" ]]; then
+                reason="dead owner"
+            else
+                reason="stale"
+            fi
+
+            # Find the lock directory in the matching project
+            while IFS= read -r pr; do
+                [[ -z "$pr" || ! -d "$pr" ]] && continue
+                local pname
+                pname=$(basename "$pr")
+                [[ "$pname" != "$project_name" ]] && continue
+
+                local lock_dir=""
+                # Check all possible lock directory locations
+                for locks_base in "$pr/scripts/ralph/locks" "$pr/.claude/ralph/locks" "$pr/ralph/locks" "$pr/tasks/locks" "$pr/project/locks" "$pr/locks"; do
+                    if [[ -d "$locks_base/${story_id}.lock" ]]; then
+                        lock_dir="$locks_base/${story_id}.lock"
+                        break
+                    fi
+                done
+
+                if [[ -n "$lock_dir" && -d "$lock_dir" ]]; then
+                    write_colored yellow "  Removing lock: $project_name/$story_id ($reason)"
+                    rm -rf "$lock_dir" 2>/dev/null && ((cleaned++)) || true
+                fi
+                break
+            done <<< "$project_roots"
+        fi
+    done < <(echo "$locks_json" | jq -c '.[]')
+
+    echo "$cleaned"
+}
+
 # invoke_cleanup()
-# Runs cleanup for dead instances
+# Runs cleanup for dead instances and stale locks
 #
 invoke_cleanup() {
     clear
     "$SCRIPT_DIR/ralph-cleanup.sh" --dead --terminated
+
+    # Clean up stale locks from all projects
+    write_colored blue "Cleaning up stale locks..."
+    local locks_cleaned
+    locks_cleaned=$(clear_stale_locks_all_projects)
+    if [[ "$locks_cleaned" -gt 0 ]]; then
+        write_colored green "Cleaned $locks_cleaned stale locks"
+    else
+        write_colored green "No stale locks found"
+    fi
+
     # Also clean up global registry entries for completed projects
     local registry_cleaned
     registry_cleaned=$(clear_global_registry_completed)

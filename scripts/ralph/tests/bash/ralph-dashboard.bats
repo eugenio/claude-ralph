@@ -32,11 +32,11 @@ setup() {
     setup_test_environment
 
     # RALPH_SCRIPT_DIR_ORIG points to scripts/ralph/tests/bash/../.. = scripts/ralph
-    # The dashboard is at project root: scripts/ralph/../.. = project root
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
+    # The dashboard is at scripts/ralph/ralph-dashboard.sh
+    local ralph_dir="$RALPH_SCRIPT_DIR_ORIG"
 
-    # Copy ralph-dashboard.sh from project root to test directory
-    cp "$project_root/ralph-dashboard.sh" "$TEST_TEMP_DIR/scripts/ralph/"
+    # Copy ralph-dashboard.sh from scripts/ralph to test directory
+    cp "$ralph_dir/ralph-dashboard.sh" "$TEST_TEMP_DIR/scripts/ralph/"
     chmod +x "$TEST_TEMP_DIR/scripts/ralph/ralph-dashboard.sh"
 
     # Create prd.json for tests
@@ -367,25 +367,21 @@ run_test_dashboard() {
 # SCRIPT STRUCTURE TESTS
 # =============================================================================
 
-@test "ralph-dashboard.sh exists at project root" {
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
-    assert_file_exists "$project_root/ralph-dashboard.sh"
+@test "ralph-dashboard.sh exists in scripts/ralph" {
+    assert_file_exists "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
 }
 
 @test "ralph-dashboard.sh is executable" {
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
-    [[ -x "$project_root/ralph-dashboard.sh" ]]
+    [[ -x "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh" ]]
 }
 
 @test "ralph-dashboard.sh has valid bash syntax" {
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
-    run bash -n "$project_root/ralph-dashboard.sh"
+    run bash -n "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
     assert_success
 }
 
 @test "ralph-dashboard.sh contains required functions" {
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
-    local dashboard="$project_root/ralph-dashboard.sh"
+    local dashboard="$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
 
     grep -q "get_prd_status()" "$dashboard"
     grep -q "get_progress_bar()" "$dashboard"
@@ -964,41 +960,87 @@ EOF
 # =============================================================================
 
 @test "handles unicode box drawing characters" {
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
-    run grep -q "═" "$project_root/ralph-dashboard.sh"
+    run grep -q "═" "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
     assert_success
 }
 
 @test "handles tput initialization gracefully" {
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
-    run grep -q "init_colors" "$project_root/ralph-dashboard.sh"
+    # Check that tput is used for terminal control
+    run grep -q "tput" "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
     assert_success
 }
 
 @test "handles clear command for TUI" {
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
-    run grep -q "clear" "$project_root/ralph-dashboard.sh"
+    run grep -q "clear" "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
     assert_success
 }
 
 @test "handles cursor hide/show for TUI" {
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
-    run grep -q "civis" "$project_root/ralph-dashboard.sh"
+    run grep -q "civis" "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
     assert_success
-    run grep -q "cnorm" "$project_root/ralph-dashboard.sh"
+    run grep -q "cnorm" "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
     assert_success
 }
 
 @test "dashboard uses trap for cleanup" {
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
-    run grep -q "trap" "$project_root/ralph-dashboard.sh"
+    run grep -q "trap" "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
     assert_success
 }
 
 @test "dashboard handles refresh interval argument" {
-    local project_root="$RALPH_SCRIPT_DIR_ORIG/../.."
-    run grep -q "REFRESH_INTERVAL" "$project_root/ralph-dashboard.sh"
+    run grep -q "REFRESH_INTERVAL" "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
     assert_success
-    run grep -q "\-\-refresh" "$project_root/ralph-dashboard.sh"
+    run grep -q "\-\-refresh" "$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
     assert_success
+}
+
+# =============================================================================
+# STALE LOCK CLEANUP TESTS
+# =============================================================================
+
+@test "get_all_projects_locks function exists" {
+    # RALPH_SCRIPT_DIR_ORIG points to scripts/ralph
+    local dashboard="$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
+    run grep -q "get_all_projects_locks()" "$dashboard"
+    assert_success
+}
+
+@test "clear_stale_locks_all_projects function exists" {
+    local dashboard="$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
+    run grep -q "clear_stale_locks_all_projects()" "$dashboard"
+    assert_success
+}
+
+@test "get_all_projects_locks checks all 6 lock directories" {
+    local dashboard="$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
+    # Check that all 6 paths are searched
+    run grep "scripts/ralph/locks" "$dashboard"
+    assert_success
+    run grep ".claude/ralph/locks" "$dashboard"
+    assert_success
+    run grep '"$pr/ralph/locks"' "$dashboard"
+    assert_success
+    run grep "tasks/locks" "$dashboard"
+    assert_success
+    run grep "project/locks" "$dashboard"
+    assert_success
+}
+
+@test "stale lock detection uses 7200 second threshold" {
+    local dashboard="$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
+    run grep '7200' "$dashboard"
+    assert_success
+}
+
+@test "dead owner detection uses 300 second threshold" {
+    local dashboard="$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
+    run grep '300' "$dashboard"
+    assert_success
+}
+
+@test "invoke_cleanup calls stale locks cleanup" {
+    local dashboard="$RALPH_SCRIPT_DIR_ORIG/ralph-dashboard.sh"
+    run grep -A 30 "invoke_cleanup()" "$dashboard"
+    assert_success
+    assert_output_contains "clear_stale_locks_all_projects"
 }

@@ -429,9 +429,73 @@ function Show-LocksDetail {
     $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
 }
 
+function Clear-StaleLocksAllProjects {
+    $locks = Get-AllProjectsLocks
+    $instances = Get-RalphGlobalInstances -IncludeDead
+    $projectRoots = @($instances | ForEach-Object { $_.projectRoot } | Where-Object { $_ } | Sort-Object -Unique)
+
+    # Add local root
+    $localRoot = (Get-RalphPaths).ProjectRoot
+    if ($localRoot -and $localRoot -notin $projectRoots) {
+        $projectRoots += $localRoot
+    }
+
+    $cleaned = 0
+    foreach ($lock in $locks) {
+        if ($lock.IsDead -or $lock.IsStale) {
+            $reason = if ($lock.IsDead) { 'dead owner' } else { 'stale' }
+            $projectName = $lock.Project
+            $storyId = $lock.StoryId
+
+            # Find the lock directory in the matching project
+            foreach ($pr in $projectRoots) {
+                if (-not $pr -or -not (Test-Path $pr)) { continue }
+                $pname = Split-Path -Path $pr -Leaf
+                if ($pname -ne $projectName) { continue }
+
+                $lockDir = $null
+                # Check all possible lock directory locations
+                $lockBases = @(
+                    (Join-Path $pr 'scripts' 'ralph' 'locks'),
+                    (Join-Path $pr '.claude' 'ralph' 'locks'),
+                    (Join-Path $pr 'ralph' 'locks'),
+                    (Join-Path $pr 'tasks' 'locks'),
+                    (Join-Path $pr 'project' 'locks'),
+                    (Join-Path $pr 'locks')
+                )
+                foreach ($lockBase in $lockBases) {
+                    $testLock = Join-Path $lockBase "$storyId.lock"
+                    if (Test-Path $testLock) {
+                        $lockDir = $testLock
+                        break
+                    }
+                }
+
+                if ($lockDir -and (Test-Path $lockDir)) {
+                    Write-Host "  Removing lock: $projectName/$storyId ($reason)" -ForegroundColor Yellow
+                    Remove-Item -Path $lockDir -Recurse -Force -ErrorAction SilentlyContinue
+                    $cleaned++
+                }
+                break
+            }
+        }
+    }
+    return $cleaned
+}
+
 function Invoke-Cleanup {
     Clear-Host
     & (Join-Path $PSScriptRoot 'ralph-cleanup.ps1') -Dead -Terminated
+
+    # Clean up stale locks from all projects
+    Write-Host 'Cleaning up stale locks...' -ForegroundColor Blue
+    $locksCleaned = Clear-StaleLocksAllProjects
+    if ($locksCleaned -gt 0) {
+        Write-Host "Cleaned $locksCleaned stale locks" -ForegroundColor Green
+    } else {
+        Write-Host 'No stale locks found' -ForegroundColor Green
+    }
+
     # Also clean up global registry entries for completed projects
     $registryCleaned = Clear-RalphGlobalRegistry -IncludeCompleted
     if ($registryCleaned -gt 0) {
@@ -481,16 +545,30 @@ function Invoke-AutoCleanup {
             } catch { }
         }
 
-        # Release any global locks held by this instance
-        $locksDir = Join-Path $globalDir 'locks'
-        if (Test-Path $locksDir) {
-            Get-ChildItem -Path $locksDir -Filter '*.lock' -ErrorAction SilentlyContinue | ForEach-Object {
-                try {
-                    $lock = Get-Content $_.FullName -Raw | ConvertFrom-Json
-                    if ($lock.owner -eq $instance.instanceId) {
-                        Remove-Item $_.FullName -Force
+        # Release any locks held by this instance in project-local locks directories
+        $projectRoot = $instance.projectRoot
+        if ($projectRoot -and (Test-Path $projectRoot)) {
+            # Check all possible lock directory locations
+            $locksDirs = @(
+                (Join-Path $projectRoot 'scripts' 'ralph' 'locks'),
+                (Join-Path $projectRoot '.claude' 'ralph' 'locks'),
+                (Join-Path $projectRoot 'ralph' 'locks'),
+                (Join-Path $projectRoot 'tasks' 'locks'),
+                (Join-Path $projectRoot 'project' 'locks'),
+                (Join-Path $projectRoot 'locks')
+            )
+            foreach ($projectLocksDir in $locksDirs) {
+                if (-not (Test-Path $projectLocksDir)) { continue }
+                Get-ChildItem -Path $projectLocksDir -Directory -Filter '*.lock' -ErrorAction SilentlyContinue | ForEach-Object {
+                    $lockOwner = $null
+                    $ownerFile = Join-Path $_.FullName 'owner.txt'
+                    $ownerFileLegacy = Join-Path $_.FullName 'owner'
+                    if (Test-Path $ownerFile) { $lockOwner = (Get-Content $ownerFile -Raw).Trim() }
+                    elseif (Test-Path $ownerFileLegacy) { $lockOwner = (Get-Content $ownerFileLegacy -Raw).Trim() }
+                    if ($lockOwner -eq $instance.instanceId) {
+                        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
                     }
-                } catch { }
+                }
             }
         }
 

@@ -2459,14 +2459,38 @@ function Get-AllProjectsLocks {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     foreach ($pr in $projectRoots) {
         if (-not $pr -or -not (Test-Path $pr)) { continue }
-        $locksDir = $null
+        # Find all possible lock directories for this project
+        $locksDirPairs = @()
         $standardLocks = Join-Path $pr 'scripts' 'ralph' 'locks'
         $claudeLocks = Join-Path $pr '.claude' 'ralph' 'locks'
-        if (Test-Path $standardLocks) { $locksDir = $standardLocks }
-        elseif (Test-Path $claudeLocks) { $locksDir = $claudeLocks }
-        if (-not $locksDir) { continue }
+        $ralphLocks = Join-Path $pr 'ralph' 'locks'
+        $tasksLocks = Join-Path $pr 'tasks' 'locks'
+        $projectLocks = Join-Path $pr 'project' 'locks'
+        $rootLocks = Join-Path $pr 'locks'
+        if (Test-Path $standardLocks) {
+            $locksDirPairs += @{ Locks = $standardLocks; Instances = Join-Path $pr 'scripts' 'ralph' 'instances' }
+        }
+        if (Test-Path $claudeLocks) {
+            $locksDirPairs += @{ Locks = $claudeLocks; Instances = Join-Path $pr '.claude' 'ralph' 'instances' }
+        }
+        if (Test-Path $ralphLocks) {
+            $locksDirPairs += @{ Locks = $ralphLocks; Instances = Join-Path $pr 'ralph' 'instances' }
+        }
+        if (Test-Path $tasksLocks) {
+            $locksDirPairs += @{ Locks = $tasksLocks; Instances = Join-Path $pr 'tasks' 'instances' }
+        }
+        if (Test-Path $projectLocks) {
+            $locksDirPairs += @{ Locks = $projectLocks; Instances = Join-Path $pr 'project' 'instances' }
+        }
+        if (Test-Path $rootLocks) {
+            $locksDirPairs += @{ Locks = $rootLocks; Instances = Join-Path $pr 'instances' }
+        }
+        if ($locksDirPairs.Count -eq 0) { continue }
         $pname = Split-Path -Path $pr -Leaf
-        Get-ChildItem -Path $locksDir -Directory -Filter '*.lock' -ErrorAction SilentlyContinue | ForEach-Object {
+        foreach ($pair in $locksDirPairs) {
+            $locksDir = $pair.Locks
+            $instancesDir = $pair.Instances
+            Get-ChildItem -Path $locksDir -Directory -Filter '*.lock' -ErrorAction SilentlyContinue | ForEach-Object {
             $storyId = $_.Name -replace '\.lock$', ''
             $ownerFile = Join-Path $_.FullName 'owner.txt'
             $ownerFileLegacy = Join-Path $_.FullName 'owner'
@@ -2479,13 +2503,33 @@ function Get-AllProjectsLocks {
             elseif (Test-Path $tsFileLegacy) { $ts = [long](Get-Content $tsFileLegacy -Raw).Trim() }
             $age = $now - $ts
             $isStale = $age -gt 7200
+            # Check if the lock owner instance is dead
+            $isDead = $false
+            if ($owner -ne 'unknown' -and $instancesDir) {
+                $ownerInstanceDir = Join-Path $instancesDir $owner
+                $ownerStatusFile = Join-Path $ownerInstanceDir 'status.json'
+                if (Test-Path $ownerStatusFile) {
+                    try {
+                        $ownerStatus = Get-Content $ownerStatusFile -Raw | ConvertFrom-Json
+                        $heartbeatAge = $now - $ownerStatus.lastHeartbeatEpoch
+                        # Dead if no heartbeat > 5 min and not in terminal state
+                        if ($heartbeatAge -gt 300 -and $ownerStatus.state -notin @('terminated', 'completed')) {
+                            $isDead = $true
+                        }
+                    } catch { }
+                } else {
+                    # Instance directory not found - owner is dead/gone
+                    $isDead = $true
+                }
+            }
             $results += @{
                 StoryId = $storyId
                 Owner = $owner
                 Age = $age
                 IsStale = $isStale
-                IsDead = $false
+                IsDead = $isDead
                 Project = $pname
+            }
             }
         }
     }

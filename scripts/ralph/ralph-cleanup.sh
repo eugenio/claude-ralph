@@ -199,19 +199,26 @@ clear_dead_instances() {
             echo "$status_json" > "$instance_dir/status.json"
         fi
 
-        # Release any locks held by this instance (check global locks)
-        local global_locks_dir="$global_dir/locks"
-        if [[ -d "$global_locks_dir" ]]; then
-            for lock_file in "$global_locks_dir"/*.lock; do
-                [[ -f "$lock_file" ]] || continue
-                local lock_owner
-                lock_owner=$(jq -r '.owner // ""' "$lock_file" 2>/dev/null) || continue
-                if [[ "$lock_owner" == "$instance_id" ]]; then
-                    local story_id
-                    story_id=$(basename "$lock_file" .lock)
-                    write_colored yellow "    Releasing lock: $story_id"
-                    rm -f "$lock_file" 2>/dev/null || true
-                fi
+        # Release any locks held by this instance in project-local locks directories
+        if [[ -n "$project_root" && -d "$project_root" ]]; then
+            # Check all possible lock directory locations
+            for project_locks_dir in "$project_root/scripts/ralph/locks" "$project_root/.claude/ralph/locks" "$project_root/ralph/locks" "$project_root/tasks/locks" "$project_root/project/locks" "$project_root/locks"; do
+                [[ -d "$project_locks_dir" ]] || continue
+                for lock_dir in "$project_locks_dir"/*.lock/; do
+                    [[ -d "$lock_dir" ]] || continue
+                    local lock_owner=""
+                    if [[ -f "$lock_dir/owner.txt" ]]; then
+                        lock_owner=$(cat "$lock_dir/owner.txt" | tr -d '\n')
+                    elif [[ -f "$lock_dir/owner" ]]; then
+                        lock_owner=$(cat "$lock_dir/owner" | tr -d '\n')
+                    fi
+                    if [[ "$lock_owner" == "$instance_id" ]]; then
+                        local story_id
+                        story_id=$(basename "$lock_dir" .lock)
+                        write_colored yellow "    Releasing lock: $story_id"
+                        rm -rf "$lock_dir" 2>/dev/null || true
+                    fi
+                done
             done
         fi
 
