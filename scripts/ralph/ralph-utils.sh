@@ -294,10 +294,13 @@ get_ralph_paths() {
     local project_root
     project_root="$(cd "$ralph_dir/../.." && pwd)"
 
+    # Use exported PRD_FILE if set, otherwise default to script dir
+    local prd_file="${RALPH_PRD_FILE:-$ralph_dir/prd.json}"
+
     cat <<EOF
 RALPH_DIR="$ralph_dir"
 PROJECT_ROOT="$project_root"
-PRD_FILE="$ralph_dir/prd.json"
+PRD_FILE="$prd_file"
 PROGRESS_FILE="$ralph_dir/progress.txt"
 PROMPT_FILE="$ralph_dir/prompt.md"
 LOG_FILE="$ralph_dir/ralph.log"

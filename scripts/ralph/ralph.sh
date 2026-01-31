@@ -89,6 +89,9 @@ else
     PRD_DIR="$SCRIPT_DIR"
 fi
 
+# Export for ralph-utils.sh functions to use
+export RALPH_PRD_FILE="$PRD_FILE"
+
 # Resolve project root
 if [ -n "$PROJECT_PATH" ]; then
     PROJECT_ROOT="$(cd "$PROJECT_PATH" && pwd)"
