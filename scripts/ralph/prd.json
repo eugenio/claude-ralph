@@ -1,85 +1,142 @@
 {
-  "projectName": "install-skills-profile-update",
-  "description": "Allow install-skills.ps1 to update existing PowerShell profile functions instead of skipping them",
+  "projectName": "ralph-test-suite-rewrite",
+  "description": "Rewrite the Ralph test suite to properly test all existing scripts with accurate, passing tests in both PowerShell (Pester) and Bash",
   "branchName": "main",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Detect outdated Ralph functions in profile",
-      "description": "When Ralph functions already exist in the PowerShell profile, compare them against the current version to determine if they need updating.",
+      "title": "Audit existing PowerShell tests",
+      "description": "Review all existing .Tests.ps1 files and identify which tests are valid vs stale. Document findings.",
       "acceptanceCriteria": [
-        "Parse existing Ralph functions block from profile",
-        "Compare function definitions with current expected definitions",
-        "Identify missing functions (e.g., ralph-parallel, ralph-dashboard)",
-        "Identify functions with outdated paths",
-        "Return a status indicating: up-to-date, outdated, or missing functions"
+        "List all test files and their test count",
+        "Identify tests that reference non-existent parameters or features",
+        "Create report of tests to keep vs remove",
+        "Document findings in scripts/ralph/tests/AUDIT.md"
       ],
       "priority": 1,
       "passes": true,
-      "claimedBy": "eugen-FRAMEWORK16-UGE-13436-1769778382"
+      "claimedBy": null
     },
     {
       "id": "US-002",
-      "title": "Prompt user for update action",
-      "description": "When existing functions are detected, prompt the user with options: skip, update, or remove and reinstall.",
+      "title": "Create ralph-status test suite",
+      "description": "Write tests for ralph-status.ps1 and ralph-status.sh that test actual functionality.",
       "acceptanceCriteria": [
-        "Show current vs expected function count",
-        "Display which functions are missing or outdated",
-        "Offer options: (S)kip, (U)pdate, (R)einstall",
-        "Skip leaves profile unchanged",
-        "Update modifies only the Ralph functions block in-place",
-        "Reinstall removes old block and appends fresh one"
+        "Test PRD file reading and parsing",
+        "Test progress bar calculation",
+        "Test story table formatting",
+        "Test handling of missing PRD file",
+        "Test handling of empty PRD",
+        "PowerShell tests in ralph-status.Tests.ps1",
+        "Bash tests in bash/test-ralph-status.sh",
+        "All tests pass"
       ],
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "claimedBy": null
     },
     {
       "id": "US-003",
-      "title": "Implement in-place profile update",
-      "description": "Replace the existing Ralph functions block in the profile with the updated version while preserving other profile content.",
+      "title": "Create ralph-supervisor test suite",
+      "description": "Write tests for ralph-supervisor.ps1 and ralph-supervisor.sh.",
       "acceptanceCriteria": [
-        "Find start marker '# Ralph functions'",
-        "Find end of block (next comment marker or end of consecutive function lines)",
-        "Replace only the Ralph block, preserving everything else",
-        "Handle edge cases: block at start, middle, or end of file",
-        "Preserve file encoding and line endings",
-        "Create backup before modification (.bak file)"
+        "Test state file creation/reading",
+        "Test process spawning (mocked)",
+        "Test crash detection logic",
+        "Test restart behavior",
+        "Test graceful shutdown",
+        "PowerShell tests in ralph-supervisor.Tests.ps1",
+        "Bash tests in bash/test-ralph-supervisor.sh",
+        "All tests pass"
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "claimedBy": null
     },
     {
       "id": "US-004",
-      "title": "Add --force and --check flags",
-      "description": "Add command-line parameters to support non-interactive usage.",
+      "title": "Create ralph-stop test suite",
+      "description": "Write tests for ralph-stop.ps1 and ralph-stop.sh.",
       "acceptanceCriteria": [
-        "-Force flag updates profile without prompting",
-        "-Check flag only reports status without making changes",
-        "-SkipAliases flag skips alias installation entirely",
-        "Flags work correctly in combination",
-        "Help text documents all flags"
+        "Test signal sending (mocked)",
+        "Test state file cleanup",
+        "Test handling of non-existent processes",
+        "PowerShell tests in ralph-stop.Tests.ps1",
+        "Bash tests in bash/test-ralph-stop.sh",
+        "All tests pass"
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "claimedBy": null
     },
     {
       "id": "US-005",
-      "title": "Update bash install-skills.sh for parity",
-      "description": "Apply the same update logic to the bash version of the installer.",
+      "title": "Update RalphUtils test suite",
+      "description": "Ensure RalphUtils.Tests.ps1 covers all exported functions with no stale tests.",
       "acceptanceCriteria": [
-        "Detect existing Ralph functions in .bashrc/.zshrc",
-        "Compare against current expected definitions",
-        "Prompt for update action (skip/update/reinstall)",
-        "Implement in-place update preserving other content",
-        "Add --force and --check flags",
-        "Both scripts have feature parity"
+        "Test all exported functions from RalphUtils.psm1",
+        "Test edge cases (missing files, invalid JSON)",
+        "Test cross-platform path handling",
+        "Remove any stale tests for non-existent functions",
+        "All tests pass"
       ],
       "priority": 5,
-      "passes": true,
+      "passes": false,
+      "claimedBy": null
+    },
+    {
+      "id": "US-006",
+      "title": "Create bash test framework",
+      "description": "Set up bash testing infrastructure using shell scripts in scripts/ralph/tests/bash/.",
+      "acceptanceCriteria": [
+        "Create test runner script (run-tests.sh)",
+        "Create common test helpers/fixtures (test-helpers.sh)",
+        "Support parallel test execution",
+        "CI-compatible output format (TAP or JUnit XML)",
+        "Document usage in tests/bash/README.md"
+      ],
+      "priority": 6,
+      "passes": false,
+      "claimedBy": null
+    },
+    {
+      "id": "US-007",
+      "title": "Create ralph-utils.sh test suite",
+      "description": "Write tests for bash shared utilities in ralph-utils.sh.",
+      "acceptanceCriteria": [
+        "Test all utility functions",
+        "Test path resolution functions",
+        "Test PRD parsing functions",
+        "Test lock file operations",
+        "Tests in bash/test-ralph-utils.sh",
+        "All tests pass"
+      ],
+      "priority": 7,
+      "passes": false,
+      "claimedBy": null
+    },
+    {
+      "id": "US-008",
+      "title": "Verify all tests pass",
+      "description": "Run full test suite and ensure 100% pass rate across both PowerShell and Bash.",
+      "acceptanceCriteria": [
+        "All PowerShell Pester tests pass",
+        "All Bash tests pass",
+        "No skipped tests without documented reason",
+        "Generate test summary report"
+      ],
+      "priority": 8,
+      "passes": false,
       "claimedBy": null
     }
-  ]
+  ],
+  "qualityChecks": {
+    "pester": "pwsh -Command \"Invoke-Pester ./scripts/ralph/tests/ -Output Detailed\"",
+    "bash": "./scripts/ralph/tests/bash/run-tests.sh"
+  },
+  "techStack": {
+    "powershell": "PowerShell 7+ with Pester 5.x",
+    "bash": "Bash 4+ with shell-based test framework",
+    "testing": "Pester for PowerShell, custom shell runner for Bash"
+  }
 }
