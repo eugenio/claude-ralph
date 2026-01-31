@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-The Ralph test suite consists of **483 PowerShell Pester tests** across **7 test files**, all currently passing. There are also **2 Bash test scripts** for testing bash utilities and global registry functionality. One test file (`test-supervisor.tests.ps1`) was identified as stale and deleted.
+The Ralph test suite consists of **633 PowerShell Pester tests** across **9 test files**, all currently passing. There are also comprehensive BATS tests in `tests/bash/` and 2 shell test scripts for testing bash utilities. One test file (`test-supervisor.tests.ps1`) was identified as stale and deleted.
 
 ## Test File Inventory
 
@@ -17,14 +17,27 @@ The Ralph test suite consists of **483 PowerShell Pester tests** across **7 test
 | install-skills.Tests.ps1 | 191 | Valid | Tests for `install-skills.ps1` - skill installation, profile aliases, update detection |
 | ralph.Tests.ps1 | 77 | Valid | Tests for `ralph.ps1` main loop script |
 | ralph-once.Tests.ps1 | 61 | Valid | Tests for `ralph-once.ps1` single iteration script |
-| ralph-status.Tests.ps1 | 64 | Valid | Tests for `ralph-status.ps1` status checker |
-| RalphUtils.Tests.ps1 | 47 | Valid | Tests for `RalphUtils.psm1` shared module |
+| ralph-status.Tests.ps1 | 73 | Valid | Tests for `ralph-status.ps1` status checker |
+| ralph-supervisor.Tests.ps1 | 89 | Valid | Tests for `ralph-supervisor.ps1` process supervisor (US-003) |
+| ralph-stop.Tests.ps1 | 61 | Valid | Tests for `ralph-stop.ps1` graceful stop script (US-004) |
+| RalphUtils.Tests.ps1 | 48 | Valid | Tests for `RalphUtils.psm1` shared module |
 | RalphScripts.Tests.ps1 | 22 | Valid | Tests for multiple scripts: ralph-locks, ralph-cleanup, ralph-parallel, ralph-dashboard, ralph.ps1 |
 | RalphMultiInstance.Tests.ps1 | 21 | Valid | Tests for multi-instance functionality: locking, status files, instance IDs |
 
-**Total: 483 tests** (all passing)
+**Total: 633 tests** (all passing)
 
-### Bash Tests (.sh)
+### Bash Tests (BATS)
+
+| File | Test Count | Status | Description |
+|------|------------|--------|-------------|
+| bash/ralph-utils.bats | 76 | Valid | Tests for `ralph-utils.sh` shared utilities |
+| bash/ralph-status.bats | ~50 | Valid | Tests for `ralph-status.sh` status checker |
+| bash/ralph-locks.bats | ~40 | Valid | Tests for `ralph-locks.sh` lock management |
+| bash/ralph-cleanup.bats | ~50 | Valid | Tests for `ralph-cleanup.sh` cleanup functionality |
+| bash/ralph-dashboard.bats | ~60 | Valid | Tests for `ralph-dashboard.sh` TUI dashboard |
+| bash/bash-powershell-comparison.bats | ~50 | Valid | Cross-platform parity tests |
+
+### Shell Tests (.sh)
 
 | File | Test Count | Status | Description |
 |------|------------|--------|-------------|
