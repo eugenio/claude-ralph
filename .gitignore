@@ -43,3 +43,6 @@ node_modules/
 # Project-specific working files
 scripts/ralph/prd.json
 tasks/
+
+# Ralph working directory at project root (created when running ralph on this repo)
+ralph/
