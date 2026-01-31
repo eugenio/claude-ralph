@@ -11,6 +11,23 @@
 
 ---
 
+## 2026-01-31 - US-001: Audit existing PowerShell tests (ralph-test-suite-rewrite PRD)
+- What was implemented:
+  - Audited all 7 PowerShell test files (483 tests total, all passing)
+  - Identified and documented stale test file (test-supervisor.tests.ps1) - already deleted
+  - Created comprehensive AUDIT.md documenting findings
+  - Updated prd.json with new test suite rewrite stories
+- Files changed:
+  - scripts/ralph/tests/AUDIT.md (created - comprehensive audit report)
+  - scripts/ralph/prd.json (updated with new PRD)
+  - scripts/ralph/tests/test-supervisor.tests.ps1 (deleted - stale tests)
+- **Learnings for future iterations:**
+  - Test coverage by file: install-skills(191), ralph(77), ralph-once(61), ralph-status(64), RalphUtils(47), RalphScripts(22), RalphMultiInstance(21)
+  - Stale tests identified by: incorrect path references, testing non-existent scripts/parameters
+  - Scripts needing dedicated test coverage: ralph-supervisor.ps1, ralph-stop.ps1, ralph-utils.sh
+  - Bash tests exist in test-supervisor.sh (~60 tests) and bash/test-global-registry.sh (6 tests)
+---
+
 ## 2026-01-30 - US-005: Update bash install-skills.sh for parity with PowerShell
 - What was implemented:
   - Added `populate_expected_ralph_functions` and `get_expected_ralph_functions` for expected function definitions

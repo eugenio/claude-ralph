@@ -101,14 +101,22 @@ function Clear-DeadInstances {
         Write-Host "  Dead: $projectName ($($instance.instanceId)) - no heartbeat for $($instance.heartbeatAge)s" -ForegroundColor Yellow
 
         if ($PSCmdlet.ShouldProcess($instance.instanceId, 'Mark as terminated and release locks')) {
-            # Find instance directory via global registry link
-            $linkPath = Join-Path (Join-Path $globalDir 'instances') "$projectName-$($instance.instanceId)"
+            # Find instance directory via global registry link by matching instanceId suffix
+            $instancesDir = Join-Path $globalDir 'instances'
             $instanceDir = $null
+            $linkItem = $null
 
-            if (Test-Path $linkPath) {
-                $link = Get-Item $linkPath
-                if ($link.LinkType -eq 'SymbolicLink') {
-                    $instanceDir = $link.Target
+            if (Test-Path $instancesDir) {
+                # Find link ending with the instanceId
+                $linkItem = Get-ChildItem -Path $instancesDir -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -like "*-$($instance.instanceId)" } |
+                    Select-Object -First 1
+
+                if ($linkItem) {
+                    # Handle both SymbolicLink (Unix) and Junction (Windows)
+                    if ($linkItem.LinkType -in @('SymbolicLink', 'Junction')) {
+                        $instanceDir = $linkItem.Target
+                    }
                 }
             }
 
@@ -168,7 +176,8 @@ function Clear-TerminatedInstances {
         $instanceDir = $null
 
         # Resolve symlink or directory
-        if ($link.LinkType -eq 'SymbolicLink') {
+        # Handle both SymbolicLink (Unix) and Junction (Windows)
+        if ($link.LinkType -in @('SymbolicLink', 'Junction')) {
             $instanceDir = $link.Target
         }
         elseif ($link.PSIsContainer) {
@@ -232,8 +241,8 @@ function Clear-OldInstances {
         $link = $_
         $instanceDir = $null
 
-        # Resolve symlink or directory
-        if ($link.LinkType -eq 'SymbolicLink') {
+        # Handle both SymbolicLink (Unix) and Junction (Windows)
+        if ($link.LinkType -in @('SymbolicLink', 'Junction')) {
             $instanceDir = $link.Target
         }
         elseif ($link.PSIsContainer) {

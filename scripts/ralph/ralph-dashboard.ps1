@@ -11,6 +11,12 @@
 .PARAMETER RefreshInterval
     Seconds between dashboard refreshes. Default: 2.
 
+.PARAMETER AutoClean
+    Automatically clean dead instances on startup and periodically.
+
+.PARAMETER AutoCleanInterval
+    Seconds between automatic cleanups when -AutoClean is enabled. Default: 30.
+
 .EXAMPLE
     ./ralph-dashboard.ps1
     Launch dashboard with default settings.
@@ -18,12 +24,26 @@
 .EXAMPLE
     ./ralph-dashboard.ps1 -RefreshInterval 5
     Refresh every 5 seconds.
+
+.EXAMPLE
+    ./ralph-dashboard.ps1 -AutoClean
+    Launch with automatic cleanup of dead instances every 30 seconds.
+
+.EXAMPLE
+    ./ralph-dashboard.ps1 -AutoClean -AutoCleanInterval 60
+    Launch with automatic cleanup every 60 seconds.
 #>
 
 [CmdletBinding()]
 param(
     [Parameter()]
-    [int]$RefreshInterval = 2
+    [int]$RefreshInterval = 2,
+
+    [Parameter()]
+    [switch]$AutoClean,
+
+    [Parameter()]
+    [int]$AutoCleanInterval = 30
 )
 
 # Import module
@@ -33,6 +53,10 @@ if (-not (Test-Path $modulePath)) {
     exit 1
 }
 Import-Module $modulePath -Force
+
+# Auto-clean configuration (set from params)
+$script:AutoCleanEnabled = $AutoClean.IsPresent
+$script:AutoCleanIntervalSec = $AutoCleanInterval
 
 # Dynamic frame dimensions
 $script:MinFrameWidth = 60
@@ -360,7 +384,8 @@ function Render-Footer {
     Write-Host $helpLine -NoNewline -ForegroundColor Gray
     Write-Host ([char]0x2551) -ForegroundColor Blue
 
-    $timeText = "  Last update: $(Get-Date -Format 'HH:mm:ss')"
+    $autoCleanStatus = if ($script:AutoCleanEnabled) { " [AutoClean: ${script:AutoCleanIntervalSec}s]" } else { '' }
+    $timeText = "  Last update: $(Get-Date -Format 'HH:mm:ss')$autoCleanStatus"
     $timeLine = $timeText + (' ' * [Math]::Max(0, $script:FrameWidth - $timeText.Length))
     Write-Host ([char]0x2551) -NoNewline -ForegroundColor Blue
     Write-Host $timeLine -NoNewline -ForegroundColor Gray
@@ -396,11 +421,82 @@ function Invoke-Cleanup {
     $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
 }
 
+function Invoke-AutoCleanup {
+    # Silently clean dead and terminated instances
+    $instances = Get-RalphGlobalInstances -IncludeDead
+    $dead = @($instances | Where-Object { $_.isDead })
+
+    if ($dead.Count -eq 0) { return 0 }
+
+    $globalDir = Get-RalphGlobalDir
+    $cleaned = 0
+
+    foreach ($instance in $dead) {
+        # Find instance directory via global registry link by matching instanceId suffix
+        $instancesDir = Join-Path $globalDir 'instances'
+        $instanceDir = $null
+
+        if (Test-Path $instancesDir) {
+            # Find link ending with the instanceId
+            $linkItem = Get-ChildItem -Path $instancesDir -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like "*-$($instance.instanceId)" } |
+                Select-Object -First 1
+
+            if ($linkItem) {
+                # Handle both SymbolicLink (Unix) and Junction (Windows)
+                if ($linkItem.LinkType -in @('SymbolicLink', 'Junction')) {
+                    $instanceDir = $linkItem.Target
+                }
+            }
+        }
+
+        # Update status to terminated
+        if ($instanceDir -and (Test-Path (Join-Path $instanceDir 'status.json'))) {
+            $statusFile = Join-Path $instanceDir 'status.json'
+            try {
+                $status = Get-Content $statusFile -Raw | ConvertFrom-Json
+                $status.state = 'terminated'
+                $status | ConvertTo-Json -Depth 5 | Set-Content $statusFile -Force
+            } catch { }
+        }
+
+        # Release any global locks held by this instance
+        $locksDir = Join-Path $globalDir 'locks'
+        if (Test-Path $locksDir) {
+            Get-ChildItem -Path $locksDir -Filter '*.lock' -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    $lock = Get-Content $_.FullName -Raw | ConvertFrom-Json
+                    if ($lock.owner -eq $instance.instanceId) {
+                        Remove-Item $_.FullName -Force
+                    }
+                } catch { }
+            }
+        }
+
+        $cleaned++
+    }
+
+    return $cleaned
+}
+
 # Main loop
 try {
     [Console]::CursorVisible = $false
 
+    # Initial auto-cleanup if enabled
+    if ($AutoClean) {
+        $null = Invoke-AutoCleanup
+    }
+
+    $lastAutoClean = [DateTime]::Now
+
     while ($true) {
+        # Periodic auto-cleanup if enabled
+        if ($AutoClean -and ([DateTime]::Now - $lastAutoClean).TotalSeconds -ge $AutoCleanInterval) {
+            $null = Invoke-AutoCleanup
+            $lastAutoClean = [DateTime]::Now
+        }
+
         Render-Dashboard
 
         # Wait for key or timeout
