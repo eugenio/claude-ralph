@@ -21,11 +21,21 @@ Commands:
   status   Show worker status
 
 Options:
-  -c, --count N         Number of workers (default: CPU/2)
-  -m, --max-iterations  Max iterations per worker (default: 10)
+  -c, --count N            Number of queue processors (default: CPU/2)
+  -m, --max-iterations N   Max iterations per worker (default: 10)
+  -w, --workers-per-prd N  Parallel workers per PRD (default: 1)
+  --parallel               Use ralph-parallel for each PRD (shorthand for -w with CPU/2)
 
 Examples:
+  # Start 3 queue processors (one per PRD)
   ralph-queue-workers.sh start -c 3 -m 10
+
+  # Start with 6 parallel workers per PRD
+  ralph-queue-workers.sh start -c 2 -w 6 -m 10
+
+  # Quick parallel mode (uses CPU/2 workers per PRD)
+  ralph-queue-workers.sh start --parallel -m 10
+
   ralph-queue-workers.sh stop
 EOF
 }
@@ -58,6 +68,8 @@ get_queue_workers() {
 cmd_start() {
     local count=""
     local max_iterations=""
+    local workers_per_prd=""
+    local use_parallel=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -68,6 +80,15 @@ cmd_start() {
             -m|--max-iterations)
                 max_iterations="$2"
                 shift 2
+                ;;
+            -w|--workers-per-prd)
+                workers_per_prd="$2"
+                use_parallel=1
+                shift 2
+                ;;
+            --parallel)
+                use_parallel=1
+                shift
                 ;;
             *)
                 if [[ "$1" =~ ^[0-9]+$ && -z "$count" ]]; then
@@ -83,6 +104,11 @@ cmd_start() {
 
     [[ -z "$count" || "$count" -le 0 ]] && count=$(get_default_worker_count)
     [[ -z "$max_iterations" || "$max_iterations" -le 0 ]] && max_iterations="$DEFAULT_ITERATIONS"
+
+    # If parallel mode but no workers specified, use default
+    if [[ "$use_parallel" -eq 1 && -z "$workers_per_prd" ]]; then
+        workers_per_prd=$(get_default_worker_count)
+    fi
 
     local pending_count
     pending_count=$(get_ralph_queue_entries "pending" | jq 'length')
@@ -100,14 +126,22 @@ cmd_start() {
     echo "║ STARTING QUEUE WORKERS                                                     ║"
     echo "╚════════════════════════════════════════════════════════════════════════════╝"
     echo ""
-    echo "  Workers: $count"
+    echo "  Queue processors: $count"
     echo "  Max iterations: $max_iterations per worker"
     echo "  Pending PRDs: $pending_count"
+    if [[ "$use_parallel" -eq 1 ]]; then
+        echo "  Parallel mode: ${workers_per_prd} workers per PRD"
+    fi
     echo ""
 
     local ralph_script="$SCRIPT_DIR/ralph.sh"
+    local parallel_script="$SCRIPT_DIR/ralph-parallel.sh"
     if [[ ! -f "$ralph_script" ]]; then
         write_colored red "Error: ralph.sh not found"
+        return 1
+    fi
+    if [[ "$use_parallel" -eq 1 && ! -f "$parallel_script" ]]; then
+        write_colored red "Error: ralph-parallel.sh not found"
         return 1
     fi
 
@@ -138,16 +172,31 @@ cmd_start() {
         write_colored cyan "  Starting worker $i..."
         echo "    PRD: $prd_path"
         echo "    Project: $project_root"
+        if [[ "$use_parallel" -eq 1 ]]; then
+            echo "    Parallel workers: $workers_per_prd"
+        fi
 
         [[ "$started" -gt 0 ]] && sleep 1
 
         local log_file="$workers_dir/logs/queue-worker-$i-$$.log"
-        "$ralph_script" "$max_iterations" \
-            --queue-mode \
-            --queue-entry "$entry_id" \
-            -p "$prd_path" \
-            -r "$project_root" \
-            > "$log_file" 2>&1 &
+
+        if [[ "$use_parallel" -eq 1 ]]; then
+            # Use ralph-parallel for multiple workers per PRD
+            "$parallel_script" start \
+                -c "$workers_per_prd" \
+                -m "$max_iterations" \
+                -p "$prd_path" \
+                -r "$project_root" \
+                > "$log_file" 2>&1 &
+        else
+            # Single worker per PRD
+            "$ralph_script" "$max_iterations" \
+                --queue-mode \
+                --queue-entry "$entry_id" \
+                -p "$prd_path" \
+                -r "$project_root" \
+                > "$log_file" 2>&1 &
+        fi
         local pid=$!
 
         workers_json=$(echo "$workers_json" | jq \

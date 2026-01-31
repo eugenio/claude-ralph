@@ -42,7 +42,14 @@ param(
 
     [Parameter()]
     [Alias('m')]
-    [int]$MaxIterations = 10
+    [int]$MaxIterations = 10,
+
+    [Parameter()]
+    [Alias('w')]
+    [int]$WorkersPerPrd = 0,
+
+    [Parameter()]
+    [switch]$Parallel
 )
 
 # Import modules
@@ -128,11 +135,21 @@ Commands:
   help     Show this help
 
 Options:
-  -Count N, -c N            Number of workers (default: CPU cores / 2)
-  -MaxIterations N, -m N    Max iterations per worker (default: 10)
+  -Count N, -c N              Number of queue processors (default: CPU cores / 2)
+  -MaxIterations N, -m N      Max iterations per worker (default: 10)
+  -WorkersPerPrd N, -w N      Parallel workers per PRD (default: 1)
+  -Parallel                   Use ralph-parallel for each PRD (shorthand for -w with CPU/2)
 
 Examples:
+  # Start 3 queue processors (one per PRD)
   ./ralph-queue-workers.ps1 start -c 3 -m 10
+
+  # Start with 6 parallel workers per PRD
+  ./ralph-queue-workers.ps1 start -c 2 -w 6 -m 10
+
+  # Quick parallel mode (uses CPU/2 workers per PRD)
+  ./ralph-queue-workers.ps1 start -Parallel -m 10
+
   ./ralph-queue-workers.ps1 stop
   ./ralph-queue-workers.ps1 status
 
@@ -140,11 +157,17 @@ Examples:
 }
 
 function Invoke-Start {
-    if ($Count -le 0) {
-        $Count = Get-DefaultWorkerCount
+    if ($script:Count -le 0) {
+        $script:Count = Get-DefaultWorkerCount
     }
-    if ($MaxIterations -le 0) {
-        $MaxIterations = $script:DefaultIterations
+    if ($script:MaxIterations -le 0) {
+        $script:MaxIterations = $script:DefaultIterations
+    }
+
+    # Handle parallel mode
+    $useParallel = $script:Parallel.IsPresent -or ($script:WorkersPerPrd -gt 0)
+    if ($useParallel -and $script:WorkersPerPrd -le 0) {
+        $script:WorkersPerPrd = Get-DefaultWorkerCount
     }
 
     # Check for pending queue entries
@@ -163,14 +186,22 @@ function Invoke-Start {
     Write-Host '  STARTING QUEUE WORKERS' -ForegroundColor Cyan
     Write-Host ([string]::new([char]0x2550, 78)) -ForegroundColor Blue
     Write-Host ''
-    Write-Host "  Workers: $Count"
-    Write-Host "  Max iterations: $MaxIterations per worker"
+    Write-Host "  Queue processors: $($script:Count)"
+    Write-Host "  Max iterations: $($script:MaxIterations) per worker"
     Write-Host "  Pending PRDs: $($pending.Count)"
+    if ($useParallel) {
+        Write-Host "  Parallel mode: $($script:WorkersPerPrd) workers per PRD"
+    }
     Write-Host ''
 
     $ralphScript = Join-Path $PSScriptRoot 'ralph.ps1'
+    $parallelScript = Join-Path $PSScriptRoot 'ralph-parallel.ps1'
     if (-not (Test-Path $ralphScript)) {
         Write-Host 'Error: ralph.ps1 not found' -ForegroundColor Red
+        return
+    }
+    if ($useParallel -and -not (Test-Path $parallelScript)) {
+        Write-Host 'Error: ralph-parallel.ps1 not found' -ForegroundColor Red
         return
     }
 
@@ -209,6 +240,9 @@ function Invoke-Start {
         Write-Host "  Starting worker $i..." -ForegroundColor Cyan
         Write-Host "    PRD: $prdPath"
         Write-Host "    Project: $projectRoot"
+        if ($useParallel) {
+            Write-Host "    Parallel workers: $($script:WorkersPerPrd)"
+        }
 
         # Small delay between launches
         if ($started -gt 0) {
@@ -217,11 +251,21 @@ function Invoke-Start {
 
         $logFile = Join-Path $logsDir "queue-worker-$i-$PID.log"
 
-        # Start ralph.ps1 as a background job
-        $job = Start-Job -ScriptBlock {
-            param($script, $iterations, $prd, $project, $entryId)
-            & $script -MaxIterations $iterations -PrdFile $prd -ProjectRoot $project -QueueMode -QueueEntryId $entryId
-        } -ArgumentList $ralphScript, $MaxIterations, $prdPath, $projectRoot, $entryId
+        # Start as a background job
+        if ($useParallel) {
+            # Use ralph-parallel for multiple workers per PRD
+            $job = Start-Job -ScriptBlock {
+                param($script, $workersCount, $iterations, $prd, $project)
+                & $script Start -Count $workersCount -MaxIterations $iterations -Prd $prd -ProjectRoot $project
+            } -ArgumentList $parallelScript, $script:WorkersPerPrd, $script:MaxIterations, $prdPath, $projectRoot
+        }
+        else {
+            # Single worker per PRD
+            $job = Start-Job -ScriptBlock {
+                param($script, $iterations, $prd, $project, $entryId)
+                & $script -MaxIterations $iterations -PrdFile $prd -ProjectRoot $project -QueueMode -QueueEntryId $entryId
+            } -ArgumentList $ralphScript, $script:MaxIterations, $prdPath, $projectRoot, $entryId
+        }
 
         $workers += @{
             pid = $job.Id
