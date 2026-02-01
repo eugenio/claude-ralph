@@ -464,6 +464,23 @@ function Main {
 
     # Main loop
     for ($i = 1; $i -le $MaxIterations; $i++) {
+        # Check for pause request before starting iteration
+        if (Test-RalphPauseRequested) {
+            Add-RalphInstanceLog "Pause requested. Entering paused state..."
+            $resumed = Enter-RalphPausedState -Reason "manual"
+            if (-not $resumed) {
+                # Terminate signal received during pause
+                Update-RalphStatus -State 'terminated' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+                exit 0
+            }
+        }
+
+        # Check for global rate limit before starting iteration
+        if (Test-GlobalRateLimit) {
+            Add-RalphInstanceLog "Global rate limit active. Waiting for it to clear..."
+            Wait-GlobalRateLimitClear
+        }
+
         Update-RalphStatus -State 'idle' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
 
         # Check if already complete BEFORE starting work
@@ -520,6 +537,34 @@ function Main {
         try {
             $result = Invoke-ClaudeCode -PromptPath $paths.PromptFile -ProjectRoot $paths.ProjectRoot -StoryId $story.id -PrdFile $paths.PrdFile
 
+            # Check for rate limiting
+            $rateLimitDetected = $false
+
+            # Method 1: Check exit code
+            if (Test-RateLimitByExitCode -ExitCode $result.ExitCode) {
+                $rateLimitDetected = $true
+                Invoke-RateLimitHandler -DetectionMethod "exit_code" -TriggerInfo $result.ExitCode
+            }
+
+            # Method 2: Check output patterns (if not already detected)
+            if (-not $rateLimitDetected -and $result.Output) {
+                $logFile = Join-Path $script:InstancePaths.InstanceDir "claude-output.log"
+                if (Test-Path $logFile) {
+                    $pattern = Find-RateLimitInOutput -LogFile $logFile
+                    if ($pattern) {
+                        $rateLimitDetected = $true
+                        Invoke-RateLimitHandler -DetectionMethod "output_pattern" -TriggerInfo $pattern
+                    }
+                }
+            }
+
+            # If rate limited, release claim and continue to next iteration
+            if ($rateLimitDetected) {
+                Remove-RalphStoryClaim -StoryId $story.id
+                $script:CurrentStoryId = $null
+                continue
+            }
+
             if ($result.ExitCode -ne 0) {
                 Add-RalphInstanceLog "Claude Code exited with code $($result.ExitCode)"
                 Write-ColoredOutput "Claude Code failed with exit code $($result.ExitCode)" -Color Red
@@ -549,6 +594,9 @@ function Main {
 
         if ($storyStatus.passes -eq $true) {
             Add-RalphInstanceLog "Story $($story.id) completed!"
+
+            # Clear global rate limit - successful work means API is available
+            Clear-GlobalRateLimit
 
             # Merge back to main branch
             Update-RalphStatus -State 'merging' -CurrentStory $story.id -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
