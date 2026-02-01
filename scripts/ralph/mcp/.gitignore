@@ -1,0 +1,8 @@
+# Node modules (already in root gitignore but good to be explicit)
+node_modules/
+
+# Runtime logs
+logs/
+
+# Claude settings (local to each user)
+.claude/

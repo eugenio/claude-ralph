@@ -934,6 +934,23 @@ main() {
     CURRENT_ITERATION=0
     for ((i=1; i<=MAX_ITERATIONS; i++)); do
         CURRENT_ITERATION=$i
+
+        # Check for pause request before starting iteration
+        if check_ralph_pause_requested; then
+            log "Pause requested. Entering paused state..."
+            if ! enter_ralph_paused_state "manual"; then
+                # Terminate signal received during pause
+                update_status "terminated" "$CURRENT_STORY_ID"
+                exit 0
+            fi
+        fi
+
+        # Check for global rate limit before starting iteration
+        if check_global_rate_limit; then
+            log "Global rate limit active. Waiting for it to clear..."
+            wait_for_global_rate_limit_clear
+        fi
+
         update_status "idle" ""
 
         echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
@@ -1018,6 +1035,30 @@ main() {
         # Stop heartbeat after Claude finishes
         stop_heartbeat
 
+        # Check for rate limiting
+        local rate_limit_detected=0
+        local rate_limit_pattern=""
+
+        # Method 1: Check exit code
+        if detect_rate_limit_by_exit_code "$claude_exit_code"; then
+            rate_limit_detected=1
+            handle_rate_limit_detection "exit_code" "$claude_exit_code"
+        fi
+
+        # Method 2: Check output patterns (if not already detected)
+        if [ $rate_limit_detected -eq 0 ]; then
+            if rate_limit_pattern=$(detect_rate_limit_in_output "$tee_target"); then
+                rate_limit_detected=1
+                handle_rate_limit_detection "output_pattern" "$rate_limit_pattern"
+            fi
+        fi
+
+        # If rate limited, release claim and continue to next iteration
+        if [ $rate_limit_detected -eq 1 ]; then
+            release_story_claim
+            continue
+        fi
+
         if [ $claude_exit_code -ne 0 ]; then
             log "⚠️  Claude Code exited with code $claude_exit_code"
             cd "$SCRIPT_DIR"
@@ -1037,6 +1078,9 @@ main() {
         local story_passes=$(read_prd | jq -r ".userStories[] | select(.id == \"$CURRENT_STORY_ID\") | .passes" 2>/dev/null)
         if [ "$story_passes" = "true" ]; then
             log "Story $CURRENT_STORY_ID completed!"
+
+            # Clear global rate limit - successful work means API is available
+            clear_global_rate_limit
 
             # Merge back to main branch
             update_status "merging" "$CURRENT_STORY_ID"
@@ -1059,6 +1103,11 @@ main() {
             log "✅ Done! All stories complete at iteration $i"
             update_status "completed" ""
 
+            # Send completion notification
+            ralph_notify "prd_completed" "PRD Complete" \
+                "All user stories have been implemented successfully!" \
+                "$INSTANCE_ID" "$PROJECT_ROOT"
+
             # In queue mode, check for next PRD
             if [ "$QUEUE_MODE" = "1" ]; then
                 check_and_continue_queue || exit 0
@@ -1075,6 +1124,11 @@ main() {
             echo -e "${NC}"
             log "✅ Done! All stories verified complete at iteration $i"
             update_status "completed" ""
+
+            # Send completion notification
+            ralph_notify "prd_completed" "PRD Complete" \
+                "All user stories have been implemented successfully!" \
+                "$INSTANCE_ID" "$PROJECT_ROOT"
 
             # In queue mode, check for next PRD
             if [ "$QUEUE_MODE" = "1" ]; then

@@ -2605,6 +2605,602 @@ function Get-AllProjectsLocks {
     return $results
 }
 
+# =============================================================================
+# NOTIFICATION FUNCTIONS
+# =============================================================================
+
+function Get-NotificationConfigFile {
+    <#
+    .SYNOPSIS
+    Returns the path to the notification config file
+    #>
+    $globalDir = Get-RalphGlobalDir
+    return Join-Path $globalDir "mcp/notifications.json"
+}
+
+function Send-RalphNotification {
+    <#
+    .SYNOPSIS
+    Sends a notification to configured channels
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('rate_limit_detected', 'rate_limit_cleared', 'prd_completed',
+                     'story_completed', 'instance_error', 'instance_started',
+                     'instance_stopped', 'queue_empty')]
+        [string]$Event,
+        [Parameter(Mandatory)]
+        [string]$Title,
+        [Parameter(Mandatory)]
+        [string]$Message,
+        [string]$InstanceId = "",
+        [string]$ProjectRoot = ""
+    )
+
+    $configFile = Get-NotificationConfigFile
+
+    if (-not (Test-Path $configFile)) {
+        return
+    }
+
+    try {
+        $config = Get-Content $configFile -Raw | ConvertFrom-Json
+    } catch {
+        return
+    }
+
+    $eventConfig = $config.events.$Event
+    if (-not $eventConfig -or -not $eventConfig.enabled -or $eventConfig.channels.Count -eq 0) {
+        return
+    }
+
+    foreach ($channelName in $eventConfig.channels) {
+        $channel = $config.channels.$channelName
+        if (-not $channel -or -not $channel.enabled) {
+            continue
+        }
+
+        $payload = switch ($channel.type) {
+            'slack' { Format-SlackNotification -Event $Event -Title $Title -Message $Message -InstanceId $InstanceId }
+            'discord' { Format-DiscordNotification -Event $Event -Title $Title -Message $Message -InstanceId $InstanceId }
+            default { Format-WebhookNotification -Event $Event -Title $Title -Message $Message -InstanceId $InstanceId -ProjectRoot $ProjectRoot }
+        }
+
+        # Send notification in background
+        Start-Job -ScriptBlock {
+            param($url, $payload)
+            try {
+                Invoke-RestMethod -Uri $url -Method Post -Body $payload -ContentType 'application/json' -ErrorAction SilentlyContinue
+            } catch { }
+        } -ArgumentList $channel.url, $payload | Out-Null
+    }
+}
+
+function Get-EventColor {
+    param([string]$Event)
+    switch ($Event) {
+        'rate_limit_detected' { return '#ff9800' }
+        'rate_limit_cleared' { return '#4caf50' }
+        'prd_completed' { return '#2196f3' }
+        'story_completed' { return '#8bc34a' }
+        'instance_error' { return '#f44336' }
+        'instance_started' { return '#9c27b0' }
+        'instance_stopped' { return '#607d8b' }
+        'queue_empty' { return '#00bcd4' }
+        default { return '#757575' }
+    }
+}
+
+function Get-EventEmoji {
+    param([string]$Event)
+    switch ($Event) {
+        'rate_limit_detected' { return [char]::ConvertFromUtf32(0x26A0) + [char]::ConvertFromUtf32(0xFE0F) }
+        'rate_limit_cleared' { return [char]::ConvertFromUtf32(0x2705) }
+        'prd_completed' { return [char]::ConvertFromUtf32(0x1F389) }
+        'story_completed' { return [char]::ConvertFromUtf32(0x1F4DD) }
+        'instance_error' { return [char]::ConvertFromUtf32(0x274C) }
+        'instance_started' { return [char]::ConvertFromUtf32(0x1F680) }
+        'instance_stopped' { return [char]::ConvertFromUtf32(0x1F6D1) }
+        'queue_empty' { return [char]::ConvertFromUtf32(0x1F4ED) }
+        default { return [char]::ConvertFromUtf32(0x1F4E2) }
+    }
+}
+
+function Format-SlackNotification {
+    param([string]$Event, [string]$Title, [string]$Message, [string]$InstanceId)
+    $color = Get-EventColor -Event $Event
+    $emoji = Get-EventEmoji -Event $Event
+    $timestamp = Get-Date -Format "o"
+
+    @{
+        attachments = @(@{
+            color = $color
+            blocks = @(
+                @{ type = 'header'; text = @{ type = 'plain_text'; text = "$emoji $Title"; emoji = $true } }
+                @{ type = 'section'; text = @{ type = 'mrkdwn'; text = $Message } }
+                @{ type = 'context'; elements = @(@{ type = 'mrkdwn'; text = "Ralph MCP | $timestamp$(if ($InstanceId) { " | $InstanceId" })" }) }
+            )
+        })
+    } | ConvertTo-Json -Depth 10
+}
+
+function Format-DiscordNotification {
+    param([string]$Event, [string]$Title, [string]$Message, [string]$InstanceId)
+    $color = Get-EventColor -Event $Event
+    $colorDecimal = [Convert]::ToInt32($color.TrimStart('#'), 16)
+    $emoji = Get-EventEmoji -Event $Event
+    $timestamp = Get-Date -Format "o"
+
+    @{
+        embeds = @(@{
+            title = "$emoji $Title"
+            description = $Message
+            color = $colorDecimal
+            footer = @{ text = "Ralph MCP$(if ($InstanceId) { " | $InstanceId" })" }
+            timestamp = $timestamp
+        })
+    } | ConvertTo-Json -Depth 10
+}
+
+function Format-WebhookNotification {
+    param([string]$Event, [string]$Title, [string]$Message, [string]$InstanceId, [string]$ProjectRoot)
+    @{
+        event = $Event
+        title = $Title
+        message = $Message
+        instanceId = $InstanceId
+        projectRoot = $ProjectRoot
+        timestamp = (Get-Date -Format "o")
+    } | ConvertTo-Json
+}
+
+# =============================================================================
+# RATE LIMIT DETECTION FUNCTIONS
+# =============================================================================
+
+function Get-GlobalRateLimitFile {
+    <#
+    .SYNOPSIS
+    Returns the path to the global rate limit marker file
+    #>
+    $globalDir = Get-RalphGlobalDir
+    return Join-Path $globalDir "rate_limited"
+}
+
+function Set-GlobalRateLimit {
+    <#
+    .SYNOPSIS
+    Sets the global rate limit marker so all instances pause
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$DetectedBy,
+        [Parameter(Mandatory)]
+        [string]$DetectionMethod,
+        [string]$TriggerInfo = ""
+    )
+
+    $rateLimitFile = Get-GlobalRateLimitFile
+    $parentDir = Split-Path $rateLimitFile -Parent
+    if (-not (Test-Path $parentDir)) {
+        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+    }
+
+    $now = Get-Date -Format "o"
+    $nowEpoch = [int][double]::Parse((Get-Date -UFormat %s))
+    $initialBackoff = if ($env:RALPH_RATE_BACKOFF_INITIAL) { [int]$env:RALPH_RATE_BACKOFF_INITIAL } else { 60 }
+
+    @{
+        detectedBy = $DetectedBy
+        detectedAt = $now
+        detectedAtEpoch = $nowEpoch
+        detectionMethod = $DetectionMethod
+        triggerInfo = $TriggerInfo
+        backoffSeconds = $initialBackoff
+        retryCount = 0
+    } | ConvertTo-Json | Set-Content -Path $rateLimitFile
+
+    Write-ColoredOutput "[GLOBAL] Rate limit detected by $DetectedBy - all instances will pause" -Color Red
+}
+
+function Test-GlobalRateLimit {
+    <#
+    .SYNOPSIS
+    Checks if a global rate limit is active
+    .OUTPUTS
+    Boolean - True if rate limited
+    #>
+    $rateLimitFile = Get-GlobalRateLimitFile
+    return Test-Path $rateLimitFile
+}
+
+function Clear-GlobalRateLimit {
+    <#
+    .SYNOPSIS
+    Clears the global rate limit marker
+    #>
+    $rateLimitFile = Get-GlobalRateLimitFile
+    if (Test-Path $rateLimitFile) {
+        Remove-Item $rateLimitFile -Force
+        Write-ColoredOutput "[GLOBAL] Rate limit cleared - instances can resume" -Color Green
+
+        # Send notification
+        try {
+            $instanceId = Get-RalphInstanceId
+            $shortId = Get-RalphShortId
+            Send-RalphNotification -Event 'rate_limit_cleared' -Title 'Rate Limit Cleared' `
+                -Message "Instance $shortId completed work successfully. All instances can resume." `
+                -InstanceId $instanceId
+        } catch { }
+    }
+}
+
+function Wait-GlobalRateLimitClear {
+    <#
+    .SYNOPSIS
+    Waits for the global rate limit to clear with exponential backoff
+    #>
+    $shortId = Get-RalphShortId
+    $rateLimitFile = Get-GlobalRateLimitFile
+
+    $initialBackoff = if ($env:RALPH_RATE_BACKOFF_INITIAL) { [int]$env:RALPH_RATE_BACKOFF_INITIAL } else { 60 }
+    $maxBackoff = if ($env:RALPH_RATE_BACKOFF_MAX) { [int]$env:RALPH_RATE_BACKOFF_MAX } else { 960 }
+    $backoffSeconds = $initialBackoff
+
+    Update-RalphStatus -State "rate_limited"
+
+    while (Test-Path $rateLimitFile) {
+        # Read current backoff from file
+        try {
+            $currentInfo = Get-Content $rateLimitFile -Raw | ConvertFrom-Json
+            $backoffSeconds = $currentInfo.backoffSeconds
+        } catch { }
+
+        # Add jitter
+        $jitter = Get-Random -Minimum 0 -Maximum ([Math]::Max(1, [int]($backoffSeconds / 10)))
+        $waitTime = $backoffSeconds + $jitter
+
+        Write-ColoredOutput "[$shortId] Global rate limit active. Waiting ${waitTime}s..." -Color Yellow
+        Add-RalphInstanceLog "Waiting for global rate limit to clear (${waitTime}s)"
+
+        $elapsed = 0
+        while ($elapsed -lt $waitTime) {
+            if (-not (Test-Path $rateLimitFile)) {
+                Write-ColoredOutput "[$shortId] Global rate limit cleared. Resuming..." -Color Green
+                Add-RalphInstanceLog "Global rate limit cleared, resuming"
+                Update-RalphStatus -State "idle"
+                return
+            }
+
+            if (Test-RalphResumeRequested) {
+                Clear-RalphResumeRequest
+                Clear-GlobalRateLimit
+                Write-ColoredOutput "[$shortId] Manual resume - clearing global rate limit" -Color Green
+                Add-RalphInstanceLog "Manual resume, cleared global rate limit"
+                Update-RalphStatus -State "idle"
+                return
+            }
+
+            Start-Sleep -Seconds 5
+            $elapsed += 5
+        }
+
+        # Exponential backoff
+        $backoffSeconds = [Math]::Min($backoffSeconds * 2, $maxBackoff)
+
+        # Update backoff in file
+        if (Test-Path $rateLimitFile) {
+            try {
+                $currentInfo = Get-Content $rateLimitFile -Raw | ConvertFrom-Json
+                $currentInfo.backoffSeconds = $backoffSeconds
+                $currentInfo.retryCount = $currentInfo.retryCount + 1
+                $currentInfo | ConvertTo-Json | Set-Content -Path $rateLimitFile
+            } catch { }
+        }
+    }
+
+    Update-RalphStatus -State "idle"
+}
+
+function Find-RateLimitInOutput {
+    <#
+    .SYNOPSIS
+    Scans a log file for rate limit patterns
+    .PARAMETER LogFile
+    Path to log file to scan
+    .OUTPUTS
+    String - The matched pattern if found, $null otherwise
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$LogFile
+    )
+
+    if (-not (Test-Path $LogFile)) {
+        return $null
+    }
+
+    $patterns = @(
+        'rate.?limit',
+        '429',
+        'too.?many.?requests',
+        'overloaded',
+        'capacity',
+        'try.?again.?later',
+        'request.?limit',
+        'throttl'
+    )
+
+    $content = Get-Content $LogFile -Raw -ErrorAction SilentlyContinue
+
+    foreach ($pattern in $patterns) {
+        if ($content -match $pattern) {
+            return $pattern
+        }
+    }
+
+    return $null
+}
+
+function Test-RateLimitByExitCode {
+    <#
+    .SYNOPSIS
+    Checks if exit code indicates rate limiting
+    .PARAMETER ExitCode
+    Exit code from Claude process
+    .OUTPUTS
+    Boolean - True if rate limit indicated
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [int]$ExitCode
+    )
+
+    # Exit code 2 = rate limited (proposed convention)
+    return $ExitCode -eq 2
+}
+
+function Invoke-RateLimitHandler {
+    <#
+    .SYNOPSIS
+    Handles rate limit detection and enters rate limited state
+    .PARAMETER DetectionMethod
+    Detection method ("output_pattern", "exit_code", "api_poll")
+    .PARAMETER TriggerInfo
+    Pattern or code that triggered detection
+    .OUTPUTS
+    Boolean - True when ready to continue
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$DetectionMethod,
+        [string]$TriggerInfo = ""
+    )
+
+    $instanceId = Get-RalphInstanceId
+    $shortId = Get-RalphShortId
+
+    Write-ColoredOutput "[$shortId] Rate limit detected via $DetectionMethod" -Color Yellow
+    if ($TriggerInfo) {
+        Write-ColoredOutput "[$shortId] Trigger: $TriggerInfo" -Color Yellow
+    }
+
+    Add-RalphInstanceLog "Rate limit detected: method=$DetectionMethod trigger=$TriggerInfo"
+
+    # Set global rate limit so all instances pause
+    Set-GlobalRateLimit -DetectedBy $instanceId -DetectionMethod $DetectionMethod -TriggerInfo $TriggerInfo
+
+    # Send notification
+    Send-RalphNotification -Event 'rate_limit_detected' -Title 'Rate Limit Detected' `
+        -Message "Instance $shortId detected rate limiting via $DetectionMethod" `
+        -InstanceId $instanceId
+
+    # Wait for global rate limit to clear
+    Wait-GlobalRateLimitClear
+
+    return $true
+}
+
+# =============================================================================
+# PAUSE/RESUME FUNCTIONS (MCP Integration)
+# =============================================================================
+
+function Test-RalphPauseRequested {
+    <#
+    .SYNOPSIS
+    Checks if a pause has been requested for this instance
+    .OUTPUTS
+    Boolean - True if pause requested
+    #>
+    $instanceId = Get-RalphInstanceId
+    $paths = Get-RalphPaths
+    $instanceDir = Join-Path $paths.InstancesDir $instanceId
+    $pauseFile = Join-Path $instanceDir ".pause_requested"
+
+    return Test-Path $pauseFile
+}
+
+function Test-RalphResumeRequested {
+    <#
+    .SYNOPSIS
+    Checks if a resume has been requested for this instance
+    .OUTPUTS
+    Boolean - True if resume requested
+    #>
+    $instanceId = Get-RalphInstanceId
+    $paths = Get-RalphPaths
+    $instanceDir = Join-Path $paths.InstancesDir $instanceId
+    $resumeFile = Join-Path $instanceDir ".resume_requested"
+
+    return Test-Path $resumeFile
+}
+
+function Clear-RalphPauseRequest {
+    <#
+    .SYNOPSIS
+    Clears the pause request file
+    #>
+    $instanceId = Get-RalphInstanceId
+    $paths = Get-RalphPaths
+    $instanceDir = Join-Path $paths.InstancesDir $instanceId
+    $pauseFile = Join-Path $instanceDir ".pause_requested"
+
+    if (Test-Path $pauseFile) {
+        Remove-Item $pauseFile -Force
+    }
+}
+
+function Clear-RalphResumeRequest {
+    <#
+    .SYNOPSIS
+    Clears the resume request file
+    #>
+    $instanceId = Get-RalphInstanceId
+    $paths = Get-RalphPaths
+    $instanceDir = Join-Path $paths.InstancesDir $instanceId
+    $resumeFile = Join-Path $instanceDir ".resume_requested"
+
+    if (Test-Path $resumeFile) {
+        Remove-Item $resumeFile -Force
+    }
+}
+
+function Enter-RalphPausedState {
+    <#
+    .SYNOPSIS
+    Enters paused state and waits for resume signal
+    .PARAMETER Reason
+    Reason for pause (default "manual")
+    .OUTPUTS
+    Boolean - True if resumed, False if terminated
+    #>
+    param(
+        [string]$Reason = "manual"
+    )
+
+    $instanceId = Get-RalphInstanceId
+    $shortId = Get-RalphShortId
+    $paths = Get-RalphPaths
+    $instanceDir = Join-Path $paths.InstancesDir $instanceId
+
+    # Clear the pause request since we're now handling it
+    Clear-RalphPauseRequest
+
+    # Update status to paused
+    Update-RalphStatus -State "paused"
+
+    Write-ColoredOutput "[$shortId] Instance paused ($Reason). Waiting for resume signal..." -Color Yellow
+    Add-RalphInstanceLog "Instance paused: $Reason"
+
+    # Wait for resume signal
+    while ($true) {
+        if (Test-RalphResumeRequested) {
+            Clear-RalphResumeRequest
+            Write-ColoredOutput "[$shortId] Resume signal received. Continuing..." -Color Green
+            Add-RalphInstanceLog "Instance resumed"
+            Update-RalphStatus -State "idle"
+            return $true
+        }
+
+        # Also check if we should terminate
+        $terminateFile = Join-Path $instanceDir ".terminate_requested"
+        if (Test-Path $terminateFile) {
+            Remove-Item $terminateFile -Force
+            Write-ColoredOutput "[$shortId] Terminate signal received during pause." -Color Red
+            Add-RalphInstanceLog "Instance terminated during pause"
+            return $false
+        }
+
+        Start-Sleep -Seconds 5
+    }
+}
+
+function Enter-RalphRateLimitedState {
+    <#
+    .SYNOPSIS
+    Enters rate-limited state with exponential backoff
+    .PARAMETER InitialBackoff
+    Initial backoff in seconds (default 60)
+    .PARAMETER MaxRetries
+    Maximum number of retries (default 5)
+    .OUTPUTS
+    Boolean - True when backoff complete
+    #>
+    param(
+        [int]$InitialBackoff = 60,
+        [int]$MaxRetries = 5
+    )
+
+    $instanceId = Get-RalphInstanceId
+    $shortId = Get-RalphShortId
+    $paths = Get-RalphPaths
+    $instanceDir = Join-Path $paths.InstancesDir $instanceId
+    $rateLimitFile = Join-Path $instanceDir ".rate_limited"
+
+    # Write rate limit state file
+    $now = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+    $nowEpoch = [int][double]::Parse((Get-Date -UFormat %s))
+
+    $rateLimitData = @{
+        instanceId = $instanceId
+        pausedAt = $now
+        pausedAtEpoch = $nowEpoch
+        reason = "rate_limit_detected"
+        backoffSeconds = $InitialBackoff
+        retryCount = 0
+        maxRetries = $MaxRetries
+    }
+
+    $rateLimitData | ConvertTo-Json | Set-Content -Path $rateLimitFile
+
+    # Update status
+    Update-RalphStatus -State "rate_limited"
+
+    $backoffSeconds = $InitialBackoff
+    $retryCount = 0
+
+    while ($retryCount -lt $MaxRetries) {
+        # Add jitter (10% random variation)
+        $jitter = Get-Random -Minimum 0 -Maximum ([Math]::Max(1, [int]($backoffSeconds / 10)))
+        $waitTime = $backoffSeconds + $jitter
+
+        Write-ColoredOutput "[$shortId] Rate limited. Waiting ${waitTime}s (retry $($retryCount + 1)/$MaxRetries)..." -Color Yellow
+        Add-RalphInstanceLog "Rate limited, waiting ${waitTime}s (retry $($retryCount + 1)/$MaxRetries)"
+
+        # Check for manual resume during backoff
+        $elapsed = 0
+        while ($elapsed -lt $waitTime) {
+            if (Test-RalphResumeRequested) {
+                Clear-RalphResumeRequest
+                if (Test-Path $rateLimitFile) { Remove-Item $rateLimitFile -Force }
+                Write-ColoredOutput "[$shortId] Manual resume during rate limit backoff." -Color Green
+                Add-RalphInstanceLog "Manually resumed from rate limit"
+                Update-RalphStatus -State "idle"
+                return $true
+            }
+
+            Start-Sleep -Seconds 5
+            $elapsed += 5
+        }
+
+        # Exponential backoff (double each time, max 960s = 16min)
+        $backoffSeconds = [Math]::Min($backoffSeconds * 2, 960)
+        $retryCount++
+
+        # Update retry count in file
+        $rateLimitData.retryCount = $retryCount
+        $rateLimitData.backoffSeconds = $backoffSeconds
+        $rateLimitData | ConvertTo-Json | Set-Content -Path $rateLimitFile
+    }
+
+    # Max retries exceeded
+    if (Test-Path $rateLimitFile) { Remove-Item $rateLimitFile -Force }
+    Write-ColoredOutput "[$shortId] Max rate limit retries exceeded." -Color Red
+    Add-RalphInstanceLog "Rate limit max retries exceeded"
+    Update-RalphStatus -State "idle"
+    return $true
+}
+
 # Export all public functions
 Export-ModuleMember -Function @(
     'Get-RalphPaths'
@@ -2662,4 +3258,28 @@ Export-ModuleMember -Function @(
     'Get-ProjectPrdStatus'
     'Get-AllProjectsPrdStatus'
     'Get-AllProjectsLocks'
+    # Notification functions
+    'Get-NotificationConfigFile'
+    'Send-RalphNotification'
+    'Get-EventColor'
+    'Get-EventEmoji'
+    'Format-SlackNotification'
+    'Format-DiscordNotification'
+    'Format-WebhookNotification'
+    # Rate limit detection functions
+    'Get-GlobalRateLimitFile'
+    'Set-GlobalRateLimit'
+    'Test-GlobalRateLimit'
+    'Clear-GlobalRateLimit'
+    'Wait-GlobalRateLimitClear'
+    'Find-RateLimitInOutput'
+    'Test-RateLimitByExitCode'
+    'Invoke-RateLimitHandler'
+    # Pause/Resume functions (MCP Integration)
+    'Test-RalphPauseRequested'
+    'Test-RalphResumeRequested'
+    'Clear-RalphPauseRequest'
+    'Clear-RalphResumeRequest'
+    'Enter-RalphPausedState'
+    'Enter-RalphRateLimitedState'
 )

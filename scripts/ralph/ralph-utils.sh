@@ -1900,3 +1900,718 @@ get_ralph_next_queued_prd() {
     echo "$next_entry"
     return 0
 }
+
+# =============================================================================
+# NOTIFICATION FUNCTIONS
+# =============================================================================
+
+# get_notification_config_file()
+# Returns the path to the notification config file
+#
+get_notification_config_file() {
+    echo "$(get_ralph_global_dir)/mcp/notifications.json"
+}
+
+# ralph_notify()
+# Sends a notification to configured channels
+# Arguments:
+#   $1 - Event type (rate_limit_detected, prd_completed, etc.)
+#   $2 - Title
+#   $3 - Message
+#   $4 - Instance ID (optional)
+#   $5 - Project root (optional)
+#
+ralph_notify() {
+    local event="$1"
+    local title="$2"
+    local message="$3"
+    local instance_id="${4:-}"
+    local project_root="${5:-}"
+
+    local config_file
+    config_file=$(get_notification_config_file)
+
+    # Check if notifications are configured
+    if [[ ! -f "$config_file" ]]; then
+        return 0
+    fi
+
+    # Read config and check if event is enabled
+    local event_config
+    event_config=$(jq -r ".events.${event} // empty" "$config_file" 2>/dev/null)
+
+    if [[ -z "$event_config" ]]; then
+        return 0
+    fi
+
+    local enabled channels
+    enabled=$(echo "$event_config" | jq -r '.enabled // false')
+    channels=$(echo "$event_config" | jq -r '.channels // []')
+
+    if [[ "$enabled" != "true" || "$channels" == "[]" ]]; then
+        return 0
+    fi
+
+    # Get channel configs and send notifications
+    echo "$channels" | jq -r '.[]' 2>/dev/null | while read -r channel_name; do
+        local channel_config
+        channel_config=$(jq -r ".channels.\"$channel_name\" // empty" "$config_file")
+
+        if [[ -z "$channel_config" ]]; then
+            continue
+        fi
+
+        local channel_type channel_url channel_enabled
+        channel_type=$(echo "$channel_config" | jq -r '.type')
+        channel_url=$(echo "$channel_config" | jq -r '.url')
+        channel_enabled=$(echo "$channel_config" | jq -r '.enabled // true')
+
+        if [[ "$channel_enabled" != "true" || -z "$channel_url" ]]; then
+            continue
+        fi
+
+        # Format and send notification based on channel type
+        local payload
+        case "$channel_type" in
+            slack)
+                payload=$(format_slack_notification "$event" "$title" "$message" "$instance_id")
+                ;;
+            discord)
+                payload=$(format_discord_notification "$event" "$title" "$message" "$instance_id")
+                ;;
+            *)
+                payload=$(format_webhook_notification "$event" "$title" "$message" "$instance_id" "$project_root")
+                ;;
+        esac
+
+        # Send notification (background, don't block)
+        curl -s -X POST -H "Content-Type: application/json" \
+            -d "$payload" "$channel_url" >/dev/null 2>&1 &
+    done
+}
+
+# format_slack_notification()
+# Formats a notification for Slack
+#
+format_slack_notification() {
+    local event="$1"
+    local title="$2"
+    local message="$3"
+    local instance_id="$4"
+
+    local color emoji
+    color=$(get_event_color "$event")
+    emoji=$(get_event_emoji "$event")
+
+    jq -n \
+        --arg color "$color" \
+        --arg title "$emoji $title" \
+        --arg message "$message" \
+        --arg instance_id "$instance_id" \
+        --arg timestamp "$(date -Iseconds)" \
+        '{
+            attachments: [{
+                color: $color,
+                blocks: [
+                    {
+                        type: "header",
+                        text: { type: "plain_text", text: $title, emoji: true }
+                    },
+                    {
+                        type: "section",
+                        text: { type: "mrkdwn", text: $message }
+                    },
+                    {
+                        type: "context",
+                        elements: [
+                            { type: "mrkdwn", text: ("Ralph MCP | " + $timestamp + (if $instance_id != "" then " | " + $instance_id else "" end)) }
+                        ]
+                    }
+                ]
+            }]
+        }'
+}
+
+# format_discord_notification()
+# Formats a notification for Discord
+#
+format_discord_notification() {
+    local event="$1"
+    local title="$2"
+    local message="$3"
+    local instance_id="$4"
+
+    local color emoji
+    color=$(get_event_color_decimal "$event")
+    emoji=$(get_event_emoji "$event")
+
+    jq -n \
+        --argjson color "$color" \
+        --arg title "$emoji $title" \
+        --arg message "$message" \
+        --arg instance_id "$instance_id" \
+        --arg timestamp "$(date -Iseconds)" \
+        '{
+            embeds: [{
+                title: $title,
+                description: $message,
+                color: $color,
+                footer: { text: ("Ralph MCP" + (if $instance_id != "" then " | " + $instance_id else "" end)) },
+                timestamp: $timestamp
+            }]
+        }'
+}
+
+# format_webhook_notification()
+# Formats a notification for generic webhook
+#
+format_webhook_notification() {
+    local event="$1"
+    local title="$2"
+    local message="$3"
+    local instance_id="$4"
+    local project_root="$5"
+
+    jq -n \
+        --arg event "$event" \
+        --arg title "$title" \
+        --arg message "$message" \
+        --arg instance_id "$instance_id" \
+        --arg project_root "$project_root" \
+        --arg timestamp "$(date -Iseconds)" \
+        '{
+            event: $event,
+            title: $title,
+            message: $message,
+            instanceId: $instance_id,
+            projectRoot: $project_root,
+            timestamp: $timestamp
+        }'
+}
+
+# get_event_color()
+# Returns hex color for event type
+#
+get_event_color() {
+    local event="$1"
+    case "$event" in
+        rate_limit_detected) echo "#ff9800" ;;
+        rate_limit_cleared) echo "#4caf50" ;;
+        prd_completed) echo "#2196f3" ;;
+        story_completed) echo "#8bc34a" ;;
+        instance_error) echo "#f44336" ;;
+        instance_started) echo "#9c27b0" ;;
+        instance_stopped) echo "#607d8b" ;;
+        queue_empty) echo "#00bcd4" ;;
+        *) echo "#757575" ;;
+    esac
+}
+
+# get_event_color_decimal()
+# Returns decimal color for Discord
+#
+get_event_color_decimal() {
+    local event="$1"
+    local hex
+    hex=$(get_event_color "$event")
+    printf "%d" "0x${hex#\#}"
+}
+
+# get_event_emoji()
+# Returns emoji for event type
+#
+get_event_emoji() {
+    local event="$1"
+    case "$event" in
+        rate_limit_detected) echo "⚠️" ;;
+        rate_limit_cleared) echo "✅" ;;
+        prd_completed) echo "🎉" ;;
+        story_completed) echo "📝" ;;
+        instance_error) echo "❌" ;;
+        instance_started) echo "🚀" ;;
+        instance_stopped) echo "🛑" ;;
+        queue_empty) echo "📭" ;;
+        *) echo "📢" ;;
+    esac
+}
+
+# =============================================================================
+# RATE LIMIT DETECTION FUNCTIONS
+# =============================================================================
+
+# get_global_rate_limit_file()
+# Returns the path to the global rate limit marker file
+#
+get_global_rate_limit_file() {
+    echo "$(get_ralph_global_dir)/rate_limited"
+}
+
+# detect_rate_limit_in_output()
+# Scans a log file for rate limit patterns
+# Arguments:
+#   $1 - Path to log file to scan
+# Output: The matched pattern if found
+# Returns: 0 if rate limit detected, 1 if not
+#
+detect_rate_limit_in_output() {
+    local log_file="$1"
+
+    if [[ ! -f "$log_file" ]]; then
+        return 1
+    fi
+
+    # Rate limit patterns to check
+    local patterns=(
+        'rate.?limit'
+        '429'
+        'too.?many.?requests'
+        'overloaded'
+        'capacity'
+        'try.?again.?later'
+        'request.?limit'
+        'throttl'
+    )
+
+    for pattern in "${patterns[@]}"; do
+        if grep -iqE "$pattern" "$log_file" 2>/dev/null; then
+            echo "$pattern"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# detect_rate_limit_by_exit_code()
+# Checks if exit code indicates rate limiting
+# Arguments:
+#   $1 - Exit code from Claude process
+# Returns: 0 if rate limit indicated, 1 if not
+#
+detect_rate_limit_by_exit_code() {
+    local exit_code="$1"
+
+    # Exit code 2 = rate limited (proposed convention)
+    if [[ "$exit_code" == "2" ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+# set_global_rate_limit()
+# Sets the global rate limit marker so all instances pause
+# Arguments:
+#   $1 - Instance ID that detected the limit
+#   $2 - Detection method
+#   $3 - Trigger info (optional)
+#
+set_global_rate_limit() {
+    local detected_by="$1"
+    local detection_method="$2"
+    local trigger_info="${3:-}"
+
+    local rate_limit_file
+    rate_limit_file=$(get_global_rate_limit_file)
+
+    mkdir -p "$(dirname "$rate_limit_file")"
+
+    local now now_epoch
+    now=$(date -Iseconds)
+    now_epoch=$(date +%s)
+
+    cat > "$rate_limit_file" <<EOF
+{
+    "detectedBy": "$detected_by",
+    "detectedAt": "$now",
+    "detectedAtEpoch": $now_epoch,
+    "detectionMethod": "$detection_method",
+    "triggerInfo": "$trigger_info",
+    "backoffSeconds": ${RALPH_RATE_BACKOFF_INITIAL:-60},
+    "retryCount": 0
+}
+EOF
+
+    echo -e "${RED}[GLOBAL] Rate limit detected by $detected_by - all instances will pause${NC}"
+}
+
+# check_global_rate_limit()
+# Checks if a global rate limit is active
+# Returns: 0 if rate limited, 1 if not
+#
+check_global_rate_limit() {
+    local rate_limit_file
+    rate_limit_file=$(get_global_rate_limit_file)
+
+    if [[ -f "$rate_limit_file" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# clear_global_rate_limit()
+# Clears the global rate limit marker (called after successful work)
+#
+clear_global_rate_limit() {
+    local rate_limit_file
+    rate_limit_file=$(get_global_rate_limit_file)
+
+    if [[ -f "$rate_limit_file" ]]; then
+        rm -f "$rate_limit_file"
+        echo -e "${GREEN}[GLOBAL] Rate limit cleared - instances can resume${NC}"
+
+        # Send notification
+        local instance_id short_id
+        instance_id=$(get_ralph_instance_id 2>/dev/null || echo "")
+        short_id=$(get_ralph_short_id 2>/dev/null || echo "")
+        ralph_notify "rate_limit_cleared" "Rate Limit Cleared" \
+            "Instance $short_id completed work successfully. All instances can resume." \
+            "$instance_id" "${PROJECT_ROOT:-}"
+    fi
+}
+
+# get_global_rate_limit_info()
+# Gets info about the current global rate limit
+# Output: JSON with rate limit details, or empty if not rate limited
+#
+get_global_rate_limit_info() {
+    local rate_limit_file
+    rate_limit_file=$(get_global_rate_limit_file)
+
+    if [[ -f "$rate_limit_file" ]]; then
+        cat "$rate_limit_file"
+    fi
+}
+
+# wait_for_global_rate_limit_clear()
+# Waits for the global rate limit to clear with exponential backoff
+# Returns: 0 when cleared
+#
+wait_for_global_rate_limit_clear() {
+    local instance_id short_id
+    instance_id=$(get_ralph_instance_id)
+    short_id=$(get_ralph_short_id)
+
+    local rate_limit_file
+    rate_limit_file=$(get_global_rate_limit_file)
+
+    local initial_backoff="${RALPH_RATE_BACKOFF_INITIAL:-60}"
+    local max_backoff="${RALPH_RATE_BACKOFF_MAX:-960}"
+    local backoff_seconds=$initial_backoff
+
+    # Update our status
+    update_ralph_status "rate_limited" "" 0 10 ""
+
+    while [[ -f "$rate_limit_file" ]]; do
+        # Read current backoff from file
+        local current_info
+        current_info=$(cat "$rate_limit_file" 2>/dev/null)
+        if [[ -n "$current_info" ]]; then
+            backoff_seconds=$(echo "$current_info" | jq -r '.backoffSeconds // 60')
+        fi
+
+        # Add jitter (10% random variation)
+        local jitter=$((RANDOM % (backoff_seconds / 10 + 1)))
+        local wait_time=$((backoff_seconds + jitter))
+
+        echo -e "${YELLOW}[$short_id] Global rate limit active. Waiting ${wait_time}s...${NC}"
+        add_ralph_instance_log "Waiting for global rate limit to clear (${wait_time}s)"
+
+        # Check for manual resume during wait
+        local elapsed=0
+        while [[ $elapsed -lt $wait_time ]]; do
+            # Check if rate limit was cleared
+            if [[ ! -f "$rate_limit_file" ]]; then
+                echo -e "${GREEN}[$short_id] Global rate limit cleared. Resuming...${NC}"
+                add_ralph_instance_log "Global rate limit cleared, resuming"
+                update_ralph_status "idle" "" 0 10 ""
+                return 0
+            fi
+
+            # Check for manual resume request
+            if check_ralph_resume_requested; then
+                clear_ralph_resume_request
+                # Also clear global rate limit on manual resume
+                clear_global_rate_limit
+                echo -e "${GREEN}[$short_id] Manual resume - clearing global rate limit${NC}"
+                add_ralph_instance_log "Manual resume, cleared global rate limit"
+                update_ralph_status "idle" "" 0 10 ""
+                return 0
+            fi
+
+            sleep 5
+            elapsed=$((elapsed + 5))
+        done
+
+        # Increase backoff for next iteration (exponential)
+        backoff_seconds=$((backoff_seconds * 2))
+        if [[ $backoff_seconds -gt $max_backoff ]]; then
+            backoff_seconds=$max_backoff
+        fi
+
+        # Update backoff in global file (first instance to update wins)
+        if [[ -f "$rate_limit_file" ]]; then
+            local retry_count
+            retry_count=$(jq -r '.retryCount // 0' "$rate_limit_file")
+            retry_count=$((retry_count + 1))
+
+            jq --argjson backoff "$backoff_seconds" --argjson retry "$retry_count" \
+                '.backoffSeconds = $backoff | .retryCount = $retry' \
+                "$rate_limit_file" > "${rate_limit_file}.tmp" 2>/dev/null && \
+                mv "${rate_limit_file}.tmp" "$rate_limit_file"
+        fi
+    done
+
+    update_ralph_status "idle" "" 0 10 ""
+    return 0
+}
+
+# handle_rate_limit_detection()
+# Handles rate limit detection and enters rate limited state
+# Arguments:
+#   $1 - Detection method ("output_pattern", "exit_code", "api_poll")
+#   $2 - Pattern or code that triggered detection (optional)
+# Returns: 0 when ready to continue, 1 if should terminate
+#
+handle_rate_limit_detection() {
+    local detection_method="$1"
+    local trigger_info="${2:-}"
+    local instance_id short_id
+
+    instance_id=$(get_ralph_instance_id)
+    short_id=$(get_ralph_short_id)
+
+    eval "$(get_ralph_paths)"
+
+    local instance_dir="$INSTANCES_DIR/$instance_id"
+
+    echo -e "${YELLOW}[$short_id] Rate limit detected via $detection_method${NC}"
+    if [[ -n "$trigger_info" ]]; then
+        echo -e "${YELLOW}[$short_id] Trigger: $trigger_info${NC}"
+    fi
+
+    add_ralph_instance_log "Rate limit detected: method=$detection_method trigger=$trigger_info"
+
+    # Set global rate limit so all instances pause
+    set_global_rate_limit "$instance_id" "$detection_method" "$trigger_info"
+
+    # Send notification
+    ralph_notify "rate_limit_detected" "Rate Limit Detected" \
+        "Instance $short_id detected rate limiting via $detection_method" \
+        "$instance_id" "$PROJECT_ROOT"
+
+    # Wait for global rate limit to clear
+    wait_for_global_rate_limit_clear
+
+    return 0
+}
+
+# =============================================================================
+# PAUSE/RESUME FUNCTIONS (MCP Integration)
+# =============================================================================
+
+# check_ralph_pause_requested()
+# Checks if a pause has been requested for this instance
+# Returns: 0 if pause requested, 1 if not
+#
+check_ralph_pause_requested() {
+    local instance_id
+    instance_id=$(get_ralph_instance_id)
+
+    eval "$(get_ralph_paths)"
+
+    local instance_dir="$INSTANCES_DIR/$instance_id"
+    local pause_file="$instance_dir/.pause_requested"
+
+    if [[ -f "$pause_file" ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+# check_ralph_resume_requested()
+# Checks if a resume has been requested for this instance
+# Returns: 0 if resume requested, 1 if not
+#
+check_ralph_resume_requested() {
+    local instance_id
+    instance_id=$(get_ralph_instance_id)
+
+    eval "$(get_ralph_paths)"
+
+    local instance_dir="$INSTANCES_DIR/$instance_id"
+    local resume_file="$instance_dir/.resume_requested"
+
+    if [[ -f "$resume_file" ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+# clear_ralph_pause_request()
+# Clears the pause request file
+#
+clear_ralph_pause_request() {
+    local instance_id
+    instance_id=$(get_ralph_instance_id)
+
+    eval "$(get_ralph_paths)"
+
+    local instance_dir="$INSTANCES_DIR/$instance_id"
+    local pause_file="$instance_dir/.pause_requested"
+
+    rm -f "$pause_file"
+}
+
+# clear_ralph_resume_request()
+# Clears the resume request file
+#
+clear_ralph_resume_request() {
+    local instance_id
+    instance_id=$(get_ralph_instance_id)
+
+    eval "$(get_ralph_paths)"
+
+    local instance_dir="$INSTANCES_DIR/$instance_id"
+    local resume_file="$instance_dir/.resume_requested"
+
+    rm -f "$resume_file"
+}
+
+# enter_ralph_paused_state()
+# Enters paused state and waits for resume signal
+# Arguments:
+#   $1 - Reason for pause (optional, default "manual")
+#
+enter_ralph_paused_state() {
+    local reason="${1:-manual}"
+    local instance_id short_id
+
+    instance_id=$(get_ralph_instance_id)
+    short_id=$(get_ralph_short_id)
+
+    eval "$(get_ralph_paths)"
+
+    local instance_dir="$INSTANCES_DIR/$instance_id"
+
+    # Clear the pause request since we're now handling it
+    clear_ralph_pause_request
+
+    # Update status to paused
+    update_ralph_status "paused" "" 0 10 ""
+
+    echo -e "${YELLOW}[$short_id] Instance paused ($reason). Waiting for resume signal...${NC}"
+    add_ralph_instance_log "Instance paused: $reason"
+
+    # Wait for resume signal
+    while true; do
+        if check_ralph_resume_requested; then
+            clear_ralph_resume_request
+            echo -e "${GREEN}[$short_id] Resume signal received. Continuing...${NC}"
+            add_ralph_instance_log "Instance resumed"
+            update_ralph_status "idle" "" 0 10 ""
+            return 0
+        fi
+
+        # Also check if we should terminate
+        if [[ -f "$instance_dir/.terminate_requested" ]]; then
+            rm -f "$instance_dir/.terminate_requested"
+            echo -e "${RED}[$short_id] Terminate signal received during pause.${NC}"
+            add_ralph_instance_log "Instance terminated during pause"
+            return 1
+        fi
+
+        sleep 5
+    done
+}
+
+# enter_ralph_rate_limited_state()
+# Enters rate-limited state with exponential backoff
+# Arguments:
+#   $1 - Initial backoff seconds (default 60)
+#   $2 - Max retries (default 5)
+#
+enter_ralph_rate_limited_state() {
+    local initial_backoff="${1:-60}"
+    local max_retries="${2:-5}"
+    local instance_id short_id
+
+    instance_id=$(get_ralph_instance_id)
+    short_id=$(get_ralph_short_id)
+
+    eval "$(get_ralph_paths)"
+
+    local instance_dir="$INSTANCES_DIR/$instance_id"
+    local rate_limit_file="$instance_dir/.rate_limited"
+
+    # Write rate limit state file
+    local now now_epoch
+    now=$(date '+%Y-%m-%dT%H:%M:%SZ')
+    now_epoch=$(date +%s)
+
+    cat > "$rate_limit_file" <<EOF
+{
+    "instanceId": "$instance_id",
+    "pausedAt": "$now",
+    "pausedAtEpoch": $now_epoch,
+    "reason": "rate_limit_detected",
+    "backoffSeconds": $initial_backoff,
+    "retryCount": 0,
+    "maxRetries": $max_retries
+}
+EOF
+
+    # Update status
+    update_ralph_status "rate_limited" "" 0 10 ""
+
+    local backoff_seconds=$initial_backoff
+    local retry_count=0
+
+    while [[ $retry_count -lt $max_retries ]]; do
+        # Add jitter (10% random variation)
+        local jitter=$((RANDOM % (backoff_seconds / 10 + 1)))
+        local wait_time=$((backoff_seconds + jitter))
+
+        echo -e "${YELLOW}[$short_id] Rate limited. Waiting ${wait_time}s (retry $((retry_count + 1))/$max_retries)...${NC}"
+        add_ralph_instance_log "Rate limited, waiting ${wait_time}s (retry $((retry_count + 1))/$max_retries)"
+
+        # Check for manual resume during backoff
+        local elapsed=0
+        while [[ $elapsed -lt $wait_time ]]; do
+            if check_ralph_resume_requested; then
+                clear_ralph_resume_request
+                rm -f "$rate_limit_file"
+                echo -e "${GREEN}[$short_id] Manual resume during rate limit backoff.${NC}"
+                add_ralph_instance_log "Manually resumed from rate limit"
+                update_ralph_status "idle" "" 0 10 ""
+                return 0
+            fi
+
+            sleep 5
+            elapsed=$((elapsed + 5))
+        done
+
+        # Exponential backoff (double each time, max 960s = 16min)
+        backoff_seconds=$((backoff_seconds * 2))
+        if [[ $backoff_seconds -gt 960 ]]; then
+            backoff_seconds=960
+        fi
+
+        retry_count=$((retry_count + 1))
+
+        # Update retry count in file
+        jq --argjson retry "$retry_count" --argjson backoff "$backoff_seconds" \
+            '.retryCount = $retry | .backoffSeconds = $backoff' \
+            "$rate_limit_file" > "$rate_limit_file.tmp"
+        mv "$rate_limit_file.tmp" "$rate_limit_file"
+    done
+
+    # Max retries exceeded
+    rm -f "$rate_limit_file"
+    echo -e "${RED}[$short_id] Max rate limit retries exceeded.${NC}"
+    add_ralph_instance_log "Rate limit max retries exceeded"
+    update_ralph_status "idle" "" 0 10 ""
+    return 0
+}

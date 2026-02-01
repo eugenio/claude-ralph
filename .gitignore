@@ -21,8 +21,9 @@ scripts/ralph/tests/**/logs/
 # Banner (hosted externally)
 banner.png
 
-# Archive is optional to commit
-# archive/
+# Archive contains run history from various projects - not committed
+archive/
+scripts/ralph/archive/
 
 # OS files
 .DS_Store
