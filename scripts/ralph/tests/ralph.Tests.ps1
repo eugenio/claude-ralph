@@ -809,6 +809,214 @@ Describe 'Script Structure' {
     }
 }
 
+Describe 'Multi-Instance Integration (PS-006)' {
+    BeforeAll {
+        $script:scriptContent = Get-Content -Path $script:ralphScript -Raw
+    }
+
+    Context 'Instance ID Generation and Usage' {
+        It 'Uses Get-RalphShortId for banner display' {
+            $script:scriptContent | Should -Match 'Get-RalphShortId'
+        }
+
+        It 'Stores instance paths in script-level variable' {
+            $script:scriptContent | Should -Match '\$script:InstancePaths'
+        }
+
+        It 'Calls New-RalphInstanceDirectory on startup' {
+            $script:scriptContent | Should -Match 'New-RalphInstanceDirectory'
+        }
+    }
+
+    Context 'Instance Directory and Status' {
+        It 'Initializes multi-instance before main loop' {
+            # The New-RalphInstanceDirectory call should come before the main loop
+            $initPos = $script:scriptContent.IndexOf('New-RalphInstanceDirectory')
+            $loopPos = $script:scriptContent.IndexOf('for ($i = 1; $i -le $MaxIterations')
+            $initPos | Should -BeLessThan $loopPos
+        }
+
+        It 'Updates status with starting state on init' {
+            $script:scriptContent | Should -Match "Update-RalphStatus -State 'starting'"
+        }
+
+        It 'Updates status with state on each iteration' {
+            # Should have multiple Update-RalphStatus calls for different states
+            $workingMatches = [regex]::Matches($script:scriptContent, "Update-RalphStatus.*-State\s+'working'")
+            $workingMatches.Count | Should -BeGreaterThan 0
+        }
+
+        It 'Updates status with completed state on success' {
+            $script:scriptContent | Should -Match "Update-RalphStatus -State 'completed'"
+        }
+    }
+
+    Context 'Story Claiming and Releasing' {
+        It 'Claims story before working using Request-RalphNextStoryClaim' {
+            $script:scriptContent | Should -Match 'Request-RalphNextStoryClaim'
+        }
+
+        It 'Releases claim on story completion using Remove-RalphStoryClaim' {
+            $script:scriptContent | Should -Match 'Remove-RalphStoryClaim'
+        }
+
+        It 'Stores current story ID in script variable' {
+            $script:scriptContent | Should -Match '\$script:CurrentStoryId'
+        }
+
+        It 'Sets current story for tracking' {
+            $script:scriptContent | Should -Match 'Set-RalphCurrentStory'
+        }
+    }
+
+    Context 'Feature Branch Management' {
+        It 'Creates feature branch with New-RalphStoryBranch' {
+            $script:scriptContent | Should -Match 'New-RalphStoryBranch'
+        }
+
+        It 'Merges branch on completion with Merge-RalphStoryBranch' {
+            $script:scriptContent | Should -Match 'Merge-RalphStoryBranch'
+        }
+    }
+
+    Context 'Logging to Instance Directory' {
+        It 'Uses Add-RalphInstanceLog for logging' {
+            $script:scriptContent | Should -Match 'Add-RalphInstanceLog'
+        }
+
+        It 'Logs iteration start' {
+            $script:scriptContent | Should -Match 'Add-RalphInstanceLog.*iteration'
+        }
+    }
+
+    Context 'Cleanup Registration' {
+        It 'Registers cleanup handler' {
+            $script:scriptContent | Should -Match 'Register-RalphCleanup'
+        }
+    }
+}
+
+Describe 'Instance Directory Creation' {
+    BeforeAll {
+        $script:testDir = Join-Path $TestDrive 'ralph-instance-test'
+        New-Item -Path $script:testDir -ItemType Directory -Force | Out-Null
+        New-Item -Path (Join-Path $script:testDir 'instances') -ItemType Directory -Force | Out-Null
+    }
+
+    Context 'New-RalphInstanceDirectory Integration' {
+        It 'Creates instance directory with correct structure' {
+            # Mock Get-RalphPaths to use test directory
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir    = $script:testDir
+                    ProjectRoot = $script:testDir
+                    PrdFile     = (Join-Path $script:testDir 'prd.json')
+                }
+            }
+
+            # Generate a test instance ID
+            $testId = Get-RalphInstanceId -Force
+
+            # Create instance directory
+            $instancePaths = New-RalphInstanceDirectory -InstanceId $testId
+
+            # Verify directory was created
+            Test-Path $instancePaths.InstanceDir | Should -BeTrue
+
+            # Verify log file was created
+            Test-Path $instancePaths.LogFile | Should -BeTrue
+
+            # Verify status file was created
+            Test-Path $instancePaths.StatusFile | Should -BeTrue
+        }
+
+        It 'Creates valid status.json with starting state' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir    = $script:testDir
+                    ProjectRoot = $script:testDir
+                    PrdFile     = (Join-Path $script:testDir 'prd.json')
+                }
+            }
+
+            $testId = Get-RalphInstanceId -Force
+            $instancePaths = New-RalphInstanceDirectory -InstanceId $testId
+
+            # Read and validate status.json
+            $status = Get-Content $instancePaths.StatusFile -Raw | ConvertFrom-Json
+            $status.state | Should -Be 'starting'
+            $status.instanceId | Should -Be $testId
+            $status.lastHeartbeatEpoch | Should -BeGreaterThan 0
+        }
+
+        It 'Creates log file with header' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir    = $script:testDir
+                    ProjectRoot = $script:testDir
+                    PrdFile     = (Join-Path $script:testDir 'prd.json')
+                }
+            }
+
+            $testId = Get-RalphInstanceId -Force
+            $instancePaths = New-RalphInstanceDirectory -InstanceId $testId
+
+            $logContent = Get-Content $instancePaths.LogFile -Raw
+            $logContent | Should -Match '# Ralph Instance Log'
+            $logContent | Should -Match "Instance ID: $testId"
+        }
+    }
+
+    Context 'Status Updates During Lifecycle' {
+        It 'Updates status.json on state changes' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir    = $script:testDir
+                    ProjectRoot = $script:testDir
+                    PrdFile     = (Join-Path $script:testDir 'prd.json')
+                }
+            }
+
+            $testId = Get-RalphInstanceId -Force
+            $instancePaths = New-RalphInstanceDirectory -InstanceId $testId
+
+            # Update to working state
+            Update-RalphStatus -State 'working' -CurrentStory 'US-001' -Iteration 1 -MaxIterations 10 -InstancePaths $instancePaths
+
+            $status = Get-Content $instancePaths.StatusFile -Raw | ConvertFrom-Json
+            $status.state | Should -Be 'working'
+            $status.currentStory | Should -Be 'US-001'
+            $status.iteration | Should -Be 1
+            $status.maxIterations | Should -Be 10
+        }
+
+        It 'Updates heartbeat timestamp on each status update' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir    = $script:testDir
+                    ProjectRoot = $script:testDir
+                    PrdFile     = (Join-Path $script:testDir 'prd.json')
+                }
+            }
+
+            $testId = Get-RalphInstanceId -Force
+            $instancePaths = New-RalphInstanceDirectory -InstanceId $testId
+
+            $status1 = Get-Content $instancePaths.StatusFile -Raw | ConvertFrom-Json
+            $heartbeat1 = $status1.lastHeartbeatEpoch
+
+            Start-Sleep -Seconds 1
+
+            Update-RalphStatus -State 'idle' -InstancePaths $instancePaths
+
+            $status2 = Get-Content $instancePaths.StatusFile -Raw | ConvertFrom-Json
+            $heartbeat2 = $status2.lastHeartbeatEpoch
+
+            $heartbeat2 | Should -BeGreaterThan $heartbeat1
+        }
+    }
+}
+
 AfterAll {
     # Clean up - remove the imported module
     Remove-Module RalphUtils -ErrorAction SilentlyContinue
