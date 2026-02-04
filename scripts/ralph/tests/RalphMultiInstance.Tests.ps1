@@ -447,8 +447,8 @@ Describe 'PS-012: PRD Atomic Updates' {
     Context 'Concurrent PRD writes' {
         It 'Does not corrupt JSON with concurrent writes' {
             # Create a temporary PRD file for this test
-            # Use environment temp path which is accessible across runspaces
-            $tempDir = Join-Path $env:TEMP "concurrent-prd-test-$([Guid]::NewGuid())"
+            # Use cross-platform temp path which is accessible across runspaces
+            $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "concurrent-prd-test-$([Guid]::NewGuid())"
             New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
 
             try {
@@ -763,8 +763,9 @@ Describe 'PS-012: Instance ID Format Validation' {
             $id = Get-RalphInstanceId -Force
             $parts = $id -split '-'
             $parts[0] | Should -Not -BeNullOrEmpty
-            # Username should match current user
-            $parts[0] | Should -Be $env:USERNAME
+            # Username should match current user (cross-platform)
+            $expectedUser = if ($env:USERNAME) { $env:USERNAME } else { $env:USER }
+            $parts[0] | Should -Be $expectedUser
         }
 
         It 'Contains hostname component' {

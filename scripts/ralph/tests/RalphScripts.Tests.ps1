@@ -477,13 +477,15 @@ Describe 'ralph-dashboard.ps1' {
         }
 
         It 'Help shows RefreshInterval parameter' {
-            $help = Get-Help $script:DashboardScript -Parameter RefreshInterval 2>&1
-            $help | Should -Not -BeNullOrEmpty
+            # Check comment-based help directly since Get-Help -Parameter is unreliable in CI
+            $content = Get-Content $script:DashboardScript -Raw
+            $content | Should -Match '\.PARAMETER RefreshInterval'
         }
 
         It 'Help shows AutoClean parameter' {
-            $help = Get-Help $script:DashboardScript -Parameter AutoClean 2>&1
-            $help | Should -Not -BeNullOrEmpty
+            # Check comment-based help directly since Get-Help -Parameter is unreliable in CI
+            $content = Get-Content $script:DashboardScript -Raw
+            $content | Should -Match '\.PARAMETER AutoClean'
         }
     }
 
