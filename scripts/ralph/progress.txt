@@ -1,6 +1,38 @@
 ## Codebase Patterns
 - Ralph function definitions in PowerShell profile follow pattern: `function ralph-xxx { pwsh "$path/ralph-xxx.ps1" @args }`
 - ralph.ps1 multi-instance integration: generates instance ID, creates instance dir, writes status.json with heartbeat, claims/releases stories, uses feature branches
+- ralph-cleanup.ps1 uses [CmdletBinding(SupportsShouldProcess)] for -WhatIf support and $PSCmdlet.ShouldProcess for conditional execution
+
+---
+
+## 2026-02-04 - PS-009: ralph-cleanup.ps1 Script
+- What was implemented:
+  - Verified ralph-cleanup.ps1 already fully implements all PS-009 acceptance criteria:
+    - -Dead, -Old, -All, -WhatIf, -Terminated parameters (line 39-52)
+    - Dead instances: checks isDead property from Get-RalphGlobalInstances (5 min heartbeat threshold)
+    - Old instances: uses $env:RALPH_CLEANUP_TTL with default 7 days (line 242)
+    - Displays summary by state: Running, Completed, Terminated, Dead (Show-Summary function)
+    - -WhatIf shows what would be deleted without deleting (SupportsShouldProcess pattern)
+  - Created comprehensive Pester test suite with 70 tests covering:
+    - Script structure and syntax validation (12 tests)
+    - Help documentation (8 tests)
+    - Basic execution and summary display (10 tests)
+    - Individual flag tests: -Dead (3), -Old (4), -Terminated (3), -All (6)
+    - WhatIf mode tests (6 tests)
+    - Environment variable support (2 tests)
+    - Error handling (4 tests)
+    - Output format validation (2 tests)
+    - PS-009 acceptance criteria verification (6 tests)
+    - Combined flags tests (5 tests)
+- Files changed:
+  - scripts/ralph/tests/ralph-cleanup.Tests.ps1 (new file - 536 lines, 70 tests)
+  - prd-powershell-port.json (marked PS-009 as passes: true)
+- **Learnings for future iterations:**
+  - Use [CmdletBinding(SupportsShouldProcess)] and $PSCmdlet.ShouldProcess() for -WhatIf support
+  - $WhatIfPreference automatic variable reflects -WhatIf state in child scopes
+  - Get-RalphGlobalInstances -IncludeDead returns isDead property based on 5-min heartbeat
+  - Null coalescing ?? operator available in PowerShell 7+: `$env:VAR ?? 7`
+  - All 70 Pester tests pass for ralph-cleanup.ps1
 
 ---
 

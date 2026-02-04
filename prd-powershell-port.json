@@ -119,7 +119,7 @@
       ],
       "passes": false,
       "notes": "PowerShell signal handling differs from Bash. Use try/finally for cleanup guarantee.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-43124-1770198767"
+      "claimedBy": "eugen-FRAMEWORK16-UGE-12196-1770199660"
     },
     {
       "id": "PS-008",
@@ -136,7 +136,7 @@
       ],
       "passes": false,
       "notes": "Mirror bash ralph-locks.sh functionality. Use PowerShell cmdlet naming conventions.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-11432-1770198773"
+      "claimedBy": "eugen-FRAMEWORK16-UGE-37028-1770199665"
     },
     {
       "id": "PS-009",
@@ -150,7 +150,7 @@
         "-WhatIf shows what would be deleted without deleting",
         "Tests: cleanup commands work correctly"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Use PowerShell -WhatIf pattern for dry-run. Check lastHeartbeatEpoch in status.json.",
       "claimedBy": null
     },
@@ -169,7 +169,7 @@
       ],
       "passes": false,
       "notes": "Use Start-Job for background execution. Store job IDs for management.",
-      "claimedBy": null
+      "claimedBy": "eugen-FRAMEWORK16-UGE-44016-1770199673"
     },
     {
       "id": "PS-011",
