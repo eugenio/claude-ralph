@@ -246,7 +246,7 @@ function Clear-OldInstances {
     $instancesDir = Join-Path $globalDir 'instances'
 
     if (-not (Test-Path $instancesDir)) {
-        Write-Host 'No global instances directory' -ForegroundColor Green
+        Write-Host "No global instances directory (TTL: $ttlDays days)" -ForegroundColor Green
         return
     }
 
