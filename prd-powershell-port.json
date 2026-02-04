@@ -16,8 +16,9 @@
         "All functions have proper PowerShell help comments",
         "Tests: Import-Module succeeds and functions are available"
       ],
-      "passes": false,
-      "notes": "Foundation module. Use $env:USERNAME, $env:COMPUTERNAME, $PID, Get-Date for ID generation."
+      "passes": true,
+      "notes": "Foundation module. Use $env:USERNAME, $env:COMPUTERNAME, $PID, Get-Date for ID generation.",
+      "claimedBy": null
     },
     {
       "id": "PS-002",
@@ -32,8 +33,9 @@
         "Locks stored in locks/{story-id}.lock/ with owner.txt and timestamp.txt",
         "Tests: concurrent lock attempts, only one succeeds"
       ],
-      "passes": false,
-      "notes": "Use New-Item -ItemType Directory for atomic creation. ErrorAction Stop on failure means lock held."
+      "passes": true,
+      "notes": "Use New-Item -ItemType Directory for atomic creation. ErrorAction Stop on failure means lock held.",
+      "claimedBy": null
     },
     {
       "id": "PS-003",
@@ -48,8 +50,9 @@
         "5-second timeout with 3 retries on lock acquisition",
         "Tests: concurrent updates don't corrupt JSON"
       ],
-      "passes": false,
-      "notes": "Use [System.Threading.Mutex] for cross-process synchronization. Named mutex 'Global\\RalphPrdLock'."
+      "passes": true,
+      "notes": "Use [System.Threading.Mutex] for cross-process synchronization. Named mutex 'Global\\RalphPrdLock'.",
+      "claimedBy": null
     },
     {
       "id": "PS-004",
@@ -64,8 +67,9 @@
         "Log claims with instance ID: [SHORT_ID] Claimed PS-XXX",
         "Tests: two instances claim different stories"
       ],
-      "passes": false,
-      "notes": "Integrate locking and PRD update functions. Handle race conditions gracefully."
+      "passes": true,
+      "notes": "Integrate locking and PRD update functions. Handle race conditions gracefully.",
+      "claimedBy": null
     },
     {
       "id": "PS-005",
@@ -79,8 +83,9 @@
         "Fetch and pull before branch operations",
         "Tests: branch created, commits isolated, merge succeeds"
       ],
-      "passes": false,
-      "notes": "Use git commands via Invoke-Expression or Start-Process. Handle non-zero exit codes."
+      "passes": true,
+      "notes": "Use git commands via Invoke-Expression or Start-Process. Handle non-zero exit codes.",
+      "claimedBy": null
     },
     {
       "id": "PS-006",
@@ -96,8 +101,9 @@
         "Merge branch on story completion",
         "Tests: ralph.ps1 creates instance directory and status.json"
       ],
-      "passes": false,
-      "notes": "Integrate all module functions into main loop. Maintain backward compatibility with single-instance mode."
+      "passes": true,
+      "notes": "Integrate all module functions into main loop. Maintain backward compatibility with single-instance mode.",
+      "claimedBy": null
     },
     {
       "id": "PS-007",
@@ -112,7 +118,8 @@
         "Tests: send termination signal, verify locks released"
       ],
       "passes": false,
-      "notes": "PowerShell signal handling differs from Bash. Use try/finally for cleanup guarantee."
+      "notes": "PowerShell signal handling differs from Bash. Use try/finally for cleanup guarantee.",
+      "claimedBy": "eugen-FRAMEWORK16-UGE-43124-1770198767"
     },
     {
       "id": "PS-008",
@@ -128,7 +135,8 @@
         "Tests: all commands run without error"
       ],
       "passes": false,
-      "notes": "Mirror bash ralph-locks.sh functionality. Use PowerShell cmdlet naming conventions."
+      "notes": "Mirror bash ralph-locks.sh functionality. Use PowerShell cmdlet naming conventions.",
+      "claimedBy": "eugen-FRAMEWORK16-UGE-11432-1770198773"
     },
     {
       "id": "PS-009",
@@ -143,7 +151,8 @@
         "Tests: cleanup commands work correctly"
       ],
       "passes": false,
-      "notes": "Use PowerShell -WhatIf pattern for dry-run. Check lastHeartbeatEpoch in status.json."
+      "notes": "Use PowerShell -WhatIf pattern for dry-run. Check lastHeartbeatEpoch in status.json.",
+      "claimedBy": null
     },
     {
       "id": "PS-010",
@@ -159,7 +168,8 @@
         "Tests: parallel launch creates multiple instances"
       ],
       "passes": false,
-      "notes": "Use Start-Job for background execution. Store job IDs for management."
+      "notes": "Use Start-Job for background execution. Store job IDs for management.",
+      "claimedBy": null
     },
     {
       "id": "PS-011",
@@ -175,7 +185,8 @@
         "Tests: dashboard displays without error"
       ],
       "passes": false,
-      "notes": "Use Write-Host with -ForegroundColor. Clear-Host for refresh. Read-Host -Timeout for key input."
+      "notes": "Use Write-Host with -ForegroundColor. Clear-Host for refresh. Read-Host -Timeout for key input.",
+      "claimedBy": null
     },
     {
       "id": "PS-012",
@@ -191,7 +202,8 @@
         "All tests pass: Invoke-Pester returns 0 failures"
       ],
       "passes": false,
-      "notes": "Use Pester Describe/Context/It structure. Mock filesystem for isolation."
+      "notes": "Use Pester Describe/Context/It structure. Mock filesystem for isolation.",
+      "claimedBy": null
     },
     {
       "id": "PS-013",
@@ -207,7 +219,8 @@
         "All tests pass with Invoke-Pester"
       ],
       "passes": false,
-      "notes": "Test scripts can be invoked. Use TestDrive: for temp files."
+      "notes": "Test scripts can be invoked. Use TestDrive: for temp files.",
+      "claimedBy": null
     },
     {
       "id": "PS-014",
@@ -223,7 +236,8 @@
         "All tests pass: exit code 0"
       ],
       "passes": false,
-      "notes": "Use subshells to simulate concurrent instances. Check file contents after operations."
+      "notes": "Use subshells to simulate concurrent instances. Check file contents after operations.",
+      "claimedBy": null
     },
     {
       "id": "PS-015",
@@ -239,7 +253,8 @@
         "All tests pass: exit code 0"
       ],
       "passes": false,
-      "notes": "Integration tests for all helper scripts."
+      "notes": "Integration tests for all helper scripts.",
+      "claimedBy": null
     },
     {
       "id": "PS-016",
@@ -255,7 +270,8 @@
         "Tests pass on Linux with both bash and pwsh"
       ],
       "passes": false,
-      "notes": "Ensure implementations are interoperable. Same lock format, same JSON structure."
+      "notes": "Ensure implementations are interoperable. Same lock format, same JSON structure.",
+      "claimedBy": null
     },
     {
       "id": "PS-017",
@@ -270,7 +286,8 @@
         "Add docs/powershell-guide.md with detailed PS instructions"
       ],
       "passes": false,
-      "notes": "Comprehensive docs for both platforms."
+      "notes": "Comprehensive docs for both platforms.",
+      "claimedBy": null
     }
   ],
   "qualityChecks": {
