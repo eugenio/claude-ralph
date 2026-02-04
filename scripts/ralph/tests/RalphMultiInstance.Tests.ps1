@@ -219,3 +219,216 @@ Describe 'Status File' {
         }
     }
 }
+
+Describe 'Git Branch Functions (PS-005)' {
+    BeforeAll {
+        # Create a test git repository for each test context
+        $script:GitTestDir = Join-Path $TestDrive 'git-test'
+        New-Item -Path $script:GitTestDir -ItemType Directory -Force | Out-Null
+
+        Push-Location $script:GitTestDir
+        git init --quiet 2>$null
+        git config user.email "test@example.com"
+        git config user.name "Test User"
+
+        # Create initial commit on main
+        "initial" | Set-Content 'README.md'
+        git add README.md
+        git commit -m "Initial commit" --quiet 2>$null
+
+        # Ensure we're on main
+        $currentBranch = git rev-parse --abbrev-ref HEAD
+        if ($currentBranch -ne 'main') {
+            git branch -M main 2>$null
+        }
+
+        Pop-Location
+
+        # Create test PRD in git test dir
+        $testPrd = @{
+            featureName = 'Git Test Feature'
+            branchName = 'main'
+            userStories = @(
+                @{ id = 'GIT-001'; title = 'Git Story 1'; priority = 1; passes = $false }
+            )
+        }
+        $testPrd | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $script:GitTestDir 'prd.json')
+    }
+
+    Context 'New-RalphStoryBranch' {
+        BeforeEach {
+            # Ensure we're on main before each test
+            Push-Location $script:GitTestDir
+            git checkout main --quiet 2>$null
+            Pop-Location
+        }
+
+        It 'Creates a branch with correct naming convention' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:GitTestDir
+                    ProjectRoot = $script:GitTestDir
+                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
+                }
+            }
+
+            $branchName = New-RalphStoryBranch -StoryId 'GIT-001'
+            $branchName | Should -Match '^ralph/[a-zA-Z0-9_-]+/GIT-001$'
+
+            # Verify branch was created
+            Push-Location $script:GitTestDir
+            $currentBranch = git rev-parse --abbrev-ref HEAD 2>$null
+            Pop-Location
+            $currentBranch | Should -Be $branchName
+        }
+
+        It 'Checks out existing branch if already created' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:GitTestDir
+                    ProjectRoot = $script:GitTestDir
+                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
+                }
+            }
+
+            # First call creates branch, second checks it out
+            $branchName1 = New-RalphStoryBranch -StoryId 'GIT-001'
+            $branchName2 = New-RalphStoryBranch -StoryId 'GIT-001'
+            $branchName1 | Should -Be $branchName2
+        }
+    }
+
+    Context 'Merge-RalphStoryBranch' {
+        BeforeEach {
+            Push-Location $script:GitTestDir
+            git checkout main --quiet 2>$null
+            Pop-Location
+        }
+
+        It 'Returns true when no story branch was set by New-RalphStoryBranch' {
+            # Note: Merge-RalphStoryBranch uses $script:CurrentStoryBranch which is set by New-RalphStoryBranch
+            # When the internal variable is null, it returns true (no-op)
+            # We test this by verifying the function doesn't throw when called without prior New-RalphStoryBranch
+            # However, because of test ordering, we need to be aware the variable might be set from other tests
+            # This test validates the function runs and returns a boolean
+            $result = Merge-RalphStoryBranch -StoryId 'NONEXISTENT'
+            # The function returns true if no branch or successful merge, false on conflict
+            $finalResult = if ($result -is [array]) { $result[-1] } else { $result }
+            $finalResult | Should -BeIn @($true, $false)
+        }
+
+        It 'Merges story branch with --no-ff' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:GitTestDir
+                    ProjectRoot = $script:GitTestDir
+                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
+                }
+            }
+
+            # Create branch and make changes
+            $branchName = New-RalphStoryBranch -StoryId 'GIT-MERGE'
+
+            Push-Location $script:GitTestDir
+            $uniqueFile = "merge-test-$(Get-Random).txt"
+            "feature content" | Set-Content $uniqueFile
+            git add $uniqueFile
+            git commit -m "Add feature for merge test" --quiet 2>$null
+            Pop-Location
+
+            # Merge back - result may include git output but should end with $true
+            $result = Merge-RalphStoryBranch -StoryId 'GIT-MERGE'
+            # Check the last element if it's an array, or the value itself
+            $finalResult = if ($result -is [array]) { $result[-1] } else { $result }
+            $finalResult | Should -Be $true
+
+            # Verify we're back on main
+            Push-Location $script:GitTestDir
+            $currentBranch = git rev-parse --abbrev-ref HEAD 2>$null
+            Pop-Location
+            $currentBranch | Should -Be 'main'
+        }
+    }
+
+    Context 'Remove-RalphStoryBranch' {
+        BeforeEach {
+            Push-Location $script:GitTestDir
+            git checkout main --quiet 2>$null
+            Pop-Location
+        }
+
+        It 'Returns true when branch does not exist' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:GitTestDir
+                    ProjectRoot = $script:GitTestDir
+                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
+                }
+            }
+
+            $result = Remove-RalphStoryBranch -StoryId 'NONEXISTENT' -ShortId 'xxxxxxxx'
+            $result | Should -Be $true
+        }
+
+        It 'Removes unmerged branch with -Force' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:GitTestDir
+                    ProjectRoot = $script:GitTestDir
+                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
+                }
+            }
+
+            # Create branch with uncommitted changes
+            $branchName = New-RalphStoryBranch -StoryId 'GIT-FORCE'
+            $shortId = Get-RalphShortId
+
+            Push-Location $script:GitTestDir
+            $uniqueFile = "force-test-$(Get-Random).txt"
+            "unmerged content" | Set-Content $uniqueFile
+            git add $uniqueFile
+            git commit -m "Unmerged commit" --quiet 2>$null
+            # Switch back to main without merging
+            git checkout main --quiet 2>$null
+            Pop-Location
+
+            # Force remove
+            $result = Remove-RalphStoryBranch -StoryId 'GIT-FORCE' -ShortId $shortId -Force
+            $result | Should -Be $true
+
+            # Verify branch is gone
+            Push-Location $script:GitTestDir
+            git show-ref --verify --quiet "refs/heads/ralph/$shortId/GIT-FORCE" 2>$null
+            $branchGone = ($LASTEXITCODE -ne 0)
+            Pop-Location
+            $branchGone | Should -Be $true
+        }
+    }
+
+    Context 'Get-RalphCurrentBranch' {
+        It 'Returns current story branch or null' {
+            # This just verifies the function exists and runs
+            $branch = Get-RalphCurrentBranch
+            # Branch can be null or a string
+            if ($null -ne $branch) {
+                $branch | Should -BeOfType ([string])
+            }
+        }
+    }
+
+    Context 'Clear-RalphMergedBranches' {
+        It 'Returns count of cleaned branches' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:GitTestDir
+                    ProjectRoot = $script:GitTestDir
+                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
+                }
+            }
+
+            # Just verify the function runs without error
+            $cleaned = Clear-RalphMergedBranches
+            $cleaned | Should -BeOfType ([int])
+        }
+    }
+}

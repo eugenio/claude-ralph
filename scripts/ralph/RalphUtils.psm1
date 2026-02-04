@@ -1859,6 +1859,102 @@ function Merge-RalphStoryBranch {
 
 <#
 .SYNOPSIS
+    Removes a merged story branch.
+
+.DESCRIPTION
+    Removes the branch named ralph/{short-id}/{story-id} if it has been merged.
+    This is typically called after a successful merge to clean up.
+
+.PARAMETER StoryId
+    The story ID whose branch to remove.
+
+.PARAMETER ShortId
+    Optional short instance ID. If not provided, uses the current instance's short ID.
+
+.PARAMETER Force
+    If specified, deletes the branch even if not merged (uses -D instead of -d).
+
+.OUTPUTS
+    System.Boolean
+    Returns $true if branch was deleted or didn't exist.
+
+.EXAMPLE
+    Remove-RalphStoryBranch -StoryId 'US-001'
+
+.EXAMPLE
+    Remove-RalphStoryBranch -StoryId 'US-001' -Force
+#>
+function Remove-RalphStoryBranch {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$StoryId,
+
+        [Parameter()]
+        [string]$ShortId,
+
+        [Parameter()]
+        [switch]$Force
+    )
+
+    $paths = Get-RalphPaths
+
+    # Use provided ShortId or get current instance's short ID
+    if (-not $ShortId) {
+        $ShortId = Get-RalphShortId
+    }
+
+    $branchName = "ralph/$ShortId/$StoryId"
+
+    try {
+        Push-Location $paths.ProjectRoot
+
+        # Check if branch exists
+        $null = git show-ref --verify --quiet "refs/heads/$branchName" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Add-RalphInstanceLog "Branch does not exist: $branchName"
+            return $true
+        }
+
+        # Delete the branch
+        if ($Force) {
+            git branch -D $branchName 2>&1 | Out-Null
+        }
+        else {
+            git branch -d $branchName 2>&1 | Out-Null
+        }
+
+        if ($LASTEXITCODE -eq 0) {
+            Add-RalphInstanceLog "Deleted branch: $branchName"
+
+            # Clear script-level variable if it was our branch
+            if ($script:CurrentStoryBranch -eq $branchName) {
+                $script:CurrentStoryBranch = $null
+            }
+            return $true
+        }
+        else {
+            if (-not $Force) {
+                Add-RalphInstanceLog "WARNING: Could not delete branch $branchName (not merged?). Use -Force to force delete."
+            }
+            else {
+                Add-RalphInstanceLog "ERROR: Could not delete branch $branchName"
+            }
+            return $false
+        }
+    }
+    catch {
+        Write-Warning "Failed to remove story branch: $_"
+        return $false
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+<#
+.SYNOPSIS
     Gets the current story branch name.
 
 .OUTPUTS
@@ -3239,6 +3335,7 @@ Export-ModuleMember -Function @(
     # Git branch functions (PS-005)
     'New-RalphStoryBranch'
     'Merge-RalphStoryBranch'
+    'Remove-RalphStoryBranch'
     'Get-RalphCurrentBranch'
     'Clear-RalphMergedBranches'
     # Cleanup functions (PS-007)
