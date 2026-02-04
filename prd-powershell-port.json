@@ -117,9 +117,9 @@
         "On shutdown: log termination summary",
         "Tests: send termination signal, verify locks released"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "PowerShell signal handling differs from Bash. Use try/finally for cleanup guarantee.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-12196-1770199660"
+      "claimedBy": null
     },
     {
       "id": "PS-008",
@@ -134,9 +134,9 @@
         "Color-coded output: green=valid, yellow=stale, red=dead owner",
         "Tests: all commands run without error"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Mirror bash ralph-locks.sh functionality. Use PowerShell cmdlet naming conventions.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-37028-1770199665"
+      "claimedBy": null
     },
     {
       "id": "PS-009",
@@ -167,9 +167,9 @@
         "Default count = (CPU cores / 2), minimum 1",
         "Tests: parallel launch creates multiple instances"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Use Start-Job for background execution. Store job IDs for management.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-44016-1770199673"
+      "claimedBy": null
     },
     {
       "id": "PS-011",
@@ -184,7 +184,7 @@
         "Exit with Q key or Ctrl+C",
         "Tests: dashboard displays without error"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Use Write-Host with -ForegroundColor. Clear-Host for refresh. Read-Host -Timeout for key input.",
       "claimedBy": null
     },
@@ -203,7 +203,7 @@
       ],
       "passes": false,
       "notes": "Use Pester Describe/Context/It structure. Mock filesystem for isolation.",
-      "claimedBy": null
+      "claimedBy": "eugen-FRAMEWORK16-UGE-12320-1770200476"
     },
     {
       "id": "PS-013",
@@ -220,7 +220,7 @@
       ],
       "passes": false,
       "notes": "Test scripts can be invoked. Use TestDrive: for temp files.",
-      "claimedBy": null
+      "claimedBy": "eugen-FRAMEWORK16-UGE-37736-1770200479"
     },
     {
       "id": "PS-014",
@@ -237,7 +237,7 @@
       ],
       "passes": false,
       "notes": "Use subshells to simulate concurrent instances. Check file contents after operations.",
-      "claimedBy": null
+      "claimedBy": "eugen-FRAMEWORK16-UGE-40148-1770200483"
     },
     {
       "id": "PS-015",
