@@ -782,8 +782,9 @@ Describe 'Script Structure' {
         $script:scriptContent | Should -Match 'function Main'
     }
 
-    It 'Calls Main at the end' {
-        $script:scriptContent | Should -Match 'Main\s*$'
+    It 'Calls Main at the end (wrapped in try/finally for graceful shutdown)' {
+        # PS-007: Main is wrapped in try/finally for Ctrl+C handling
+        $script:scriptContent | Should -Match 'try\s*\{\s*Main\s*\}'
     }
 
     It 'Uses CmdletBinding' {
@@ -1013,6 +1014,221 @@ Describe 'Instance Directory Creation' {
             $heartbeat2 = $status2.lastHeartbeatEpoch
 
             $heartbeat2 | Should -BeGreaterThan $heartbeat1
+        }
+    }
+}
+
+# =============================================================================
+# PS-007: Graceful Shutdown Tests
+# =============================================================================
+
+Describe 'PS-007 - Graceful Shutdown' {
+    BeforeAll {
+        $script:testDir = Join-Path $TestDrive 'ralph-shutdown-test'
+        New-Item -Path $script:testDir -ItemType Directory -Force | Out-Null
+        New-Item -Path (Join-Path $script:testDir 'instances') -ItemType Directory -Force | Out-Null
+        New-Item -Path (Join-Path $script:testDir 'locks') -ItemType Directory -Force | Out-Null
+
+        # Create test PRD
+        $testPrd = @{
+            featureName  = 'Test Feature'
+            branchName   = 'test/branch'
+            userStories  = @(
+                @{ id = 'US-001'; title = 'Story 1'; passes = $false; priority = 1 }
+                @{ id = 'US-002'; title = 'Story 2'; passes = $true; priority = 2 }
+            )
+        }
+        $testPrd | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $script:testDir 'prd.json')
+    }
+
+    Context 'Session Tracking Functions' {
+        It 'Initialize-RalphSessionTracking sets start time' {
+            Initialize-RalphSessionTracking
+
+            # Verify start time was set by checking termination summary
+            $summary = Get-RalphTerminationSummary
+            $summary | Should -Match 'Elapsed time:'
+            $summary | Should -Not -Match 'Unknown'
+        }
+
+        It 'Update-RalphIterationCount tracks iterations' {
+            Update-RalphIterationCount -Iteration 5
+            $summary = Get-RalphTerminationSummary
+            $summary | Should -Match 'Iterations completed: 5'
+        }
+
+        It 'Initialize-RalphSessionTracking resets iteration count' {
+            Update-RalphIterationCount -Iteration 10
+            Initialize-RalphSessionTracking
+            Update-RalphIterationCount -Iteration 0
+
+            $summary = Get-RalphTerminationSummary
+            $summary | Should -Match 'Iterations completed: 0'
+        }
+    }
+
+    Context 'Termination Summary' {
+        BeforeEach {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir    = $script:testDir
+                    ProjectRoot = $script:testDir
+                    PrdFile     = (Join-Path $script:testDir 'prd.json')
+                    LocksDir    = (Join-Path $script:testDir 'locks')
+                }
+            }
+        }
+
+        It 'Get-RalphTerminationSummary returns formatted summary' {
+            Initialize-RalphSessionTracking
+            $summary = Get-RalphTerminationSummary
+
+            $summary | Should -Match '=== TERMINATION SUMMARY ==='
+            $summary | Should -Match 'Instance:'
+            $summary | Should -Match 'Elapsed time:'
+            $summary | Should -Match 'Iterations completed:'
+            $summary | Should -Match '==========================='
+        }
+
+        It 'Summary includes instance short ID' {
+            $shortId = Get-RalphShortId
+            $summary = Get-RalphTerminationSummary
+            $summary | Should -Match "Instance: $shortId"
+        }
+
+        It 'Summary reports current story if set' {
+            Set-RalphCurrentStory -StoryId 'US-TEST'
+            $summary = Get-RalphTerminationSummary
+            $summary | Should -Match 'Story in progress at shutdown: US-TEST'
+
+            # Reset
+            Set-RalphCurrentStory -StoryId $null
+        }
+
+        It 'Summary reports no story when none set' {
+            Set-RalphCurrentStory -StoryId $null
+            $summary = Get-RalphTerminationSummary
+            $summary | Should -Match 'No story in progress at shutdown'
+        }
+
+        It 'Summary includes PRD status' {
+            $summary = Get-RalphTerminationSummary
+            $summary | Should -Match 'PRD status: 1 / 2 stories complete'
+        }
+    }
+
+    Context 'Cleanup Function Double-Call Protection' {
+        It 'Invoke-RalphCleanup can be called multiple times safely' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir    = $script:testDir
+                    ProjectRoot = $script:testDir
+                    PrdFile     = (Join-Path $script:testDir 'prd.json')
+                    LocksDir    = (Join-Path $script:testDir 'locks')
+                    InstancesDir = (Join-Path $script:testDir 'instances')
+                }
+            }
+
+            # First call should work
+            { Invoke-RalphCleanup } | Should -Not -Throw
+
+            # Second call should be a no-op (not throw)
+            { Invoke-RalphCleanup } | Should -Not -Throw
+        }
+    }
+
+    Context 'ralph.ps1 try/finally Pattern' {
+        BeforeAll {
+            $script:scriptPath = Join-Path $PSScriptRoot '..' 'ralph.ps1'
+            $script:scriptContent = Get-Content $script:scriptPath -Raw
+        }
+
+        It 'Uses try/finally block for Main call' {
+            $script:scriptContent | Should -Match 'try\s*\{'
+            $script:scriptContent | Should -Match 'finally\s*\{'
+        }
+
+        It 'Calls Invoke-RalphCleanup in finally block' {
+            $script:scriptContent | Should -Match 'finally\s*\{[^}]*Invoke-RalphCleanup'
+        }
+
+        It 'Initializes session tracking' {
+            $script:scriptContent | Should -Match 'Initialize-RalphSessionTracking'
+        }
+
+        It 'Updates iteration count in loop' {
+            $script:scriptContent | Should -Match 'Update-RalphIterationCount'
+        }
+    }
+
+    Context 'Lock Release on Shutdown' {
+        BeforeEach {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir     = $script:testDir
+                    ProjectRoot  = $script:testDir
+                    PrdFile      = (Join-Path $script:testDir 'prd.json')
+                    LocksDir     = (Join-Path $script:testDir 'locks')
+                    InstancesDir = (Join-Path $script:testDir 'instances')
+                }
+            }
+
+            # Create a test lock
+            $lockDir = Join-Path $script:testDir 'locks' 'US-LOCKTEST.lock'
+            New-Item -Path $lockDir -ItemType Directory -Force | Out-Null
+            $instanceId = Get-RalphInstanceId
+            Set-Content (Join-Path $lockDir 'owner.txt') $instanceId
+            Set-Content (Join-Path $lockDir 'timestamp.txt') ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+            Set-Content (Join-Path $lockDir 'pid.txt') $PID
+        }
+
+        It 'Clear-RalphInstanceLocks releases owned locks' {
+            # Verify lock exists
+            $lockDir = Join-Path $script:testDir 'locks' 'US-LOCKTEST.lock'
+            Test-Path $lockDir | Should -BeTrue
+
+            # Clear locks
+            $released = Clear-RalphInstanceLocks
+            $released | Should -BeGreaterOrEqual 1
+
+            # Verify lock is gone
+            Test-Path $lockDir | Should -BeFalse
+        }
+    }
+
+    Context 'Status Update on Shutdown' {
+        BeforeEach {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir     = $script:testDir
+                    ProjectRoot  = $script:testDir
+                    PrdFile      = (Join-Path $script:testDir 'prd.json')
+                    LocksDir     = (Join-Path $script:testDir 'locks')
+                    InstancesDir = (Join-Path $script:testDir 'instances')
+                }
+            }
+
+            # Create instance directory
+            $testId = Get-RalphInstanceId -Force
+            $script:instancePaths = New-RalphInstanceDirectory -InstanceId $testId
+        }
+
+        It 'Update-RalphStatus can set terminated state' {
+            Update-RalphStatus -State 'terminated' -InstancePaths $script:instancePaths
+
+            $status = Get-Content $script:instancePaths.StatusFile -Raw | ConvertFrom-Json
+            $status.state | Should -Be 'terminated'
+        }
+
+        It 'Terminated state includes current story if set' {
+            Set-RalphCurrentStory -StoryId 'US-SHUTDOWN-TEST'
+            Update-RalphStatus -State 'terminated' -CurrentStory 'US-SHUTDOWN-TEST' -InstancePaths $script:instancePaths
+
+            $status = Get-Content $script:instancePaths.StatusFile -Raw | ConvertFrom-Json
+            $status.state | Should -Be 'terminated'
+            $status.currentStory | Should -Be 'US-SHUTDOWN-TEST'
+
+            Set-RalphCurrentStory -StoryId $null
         }
     }
 }

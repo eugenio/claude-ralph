@@ -218,9 +218,9 @@
         "Test ralph.ps1 instance initialization",
         "All tests pass with Invoke-Pester"
       ],
-      "passes": false,
-      "notes": "Test scripts can be invoked. Use TestDrive: for temp files.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-27656-1770200951"
+      "passes": true,
+      "notes": "Test scripts can be invoked. Use TestDrive: for temp files. All 154 tests pass.",
+      "claimedBy": null
     },
     {
       "id": "PS-014",
@@ -235,9 +235,9 @@
         "Test dead instance detection",
         "All tests pass: exit code 0"
       ],
-      "passes": false,
-      "notes": "Use subshells to simulate concurrent instances. Check file contents after operations.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-1460-1770200947"
+      "passes": true,
+      "notes": "Use subshells to simulate concurrent instances. Check file contents after operations. Fixed carriage return issue in jq output for Windows/Git Bash compatibility.",
+      "claimedBy": null
     },
     {
       "id": "PS-015",
@@ -252,9 +252,9 @@
         "Test ralph.sh creates instance directory",
         "All tests pass: exit code 0"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Integration tests for all helper scripts.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-21412-1770200955"
+      "claimedBy": null
     },
     {
       "id": "PS-016",
@@ -269,8 +269,8 @@
         "Document any platform-specific behaviors",
         "Tests pass on Linux with both bash and pwsh"
       ],
-      "passes": false,
-      "notes": "Ensure implementations are interoperable. Same lock format, same JSON structure.",
+      "passes": true,
+      "notes": "Ensure implementations are interoperable. Same lock format, same JSON structure. All 15 cross-platform tests pass.",
       "claimedBy": null
     },
     {
@@ -285,8 +285,8 @@
         "Update README.md with cross-platform instructions",
         "Add docs/powershell-guide.md with detailed PS instructions"
       ],
-      "passes": false,
-      "notes": "Comprehensive docs for both platforms.",
+      "passes": true,
+      "notes": "Comprehensive docs for both platforms. Created docs/multi-instance.md and docs/powershell-guide.md. Updated CLAUDE.md with cross-platform compatibility section.",
       "claimedBy": null
     }
   ],

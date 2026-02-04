@@ -426,6 +426,9 @@ function Main {
     $script:InstancePaths = New-RalphInstanceDirectory
     Register-RalphCleanup
 
+    # Initialize session tracking for termination summary (PS-007)
+    Initialize-RalphSessionTracking
+
     # Register in global registry (PS-004)
     $null = Register-RalphGlobalInstance
 
@@ -482,6 +485,9 @@ function Main {
         }
 
         Update-RalphStatus -State 'idle' -Iteration $i -MaxIterations $MaxIterations -InstancePaths $script:InstancePaths
+
+        # Track iteration count for termination summary (PS-007)
+        Update-RalphIterationCount -Iteration $i
 
         # Check if already complete BEFORE starting work
         $prd = Read-RalphPrdSafe
@@ -665,5 +671,13 @@ function Main {
     Invoke-QueueContinuation -CurrentStatus 'failed'
 }
 
-# Run main
-Main
+# Run main with try/finally for graceful shutdown (PS-007)
+# The finally block ensures cleanup runs even on Ctrl+C
+try {
+    Main
+}
+finally {
+    # This finally block handles Ctrl+C and other terminations
+    # The PowerShell.Exiting event may not fire for Ctrl+C in all scenarios
+    Invoke-RalphCleanup
+}

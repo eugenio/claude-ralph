@@ -2066,7 +2066,10 @@ function Clear-RalphMergedBranches {
 
 # Script-level cleanup state
 $script:CleanupRegistered = $false
+$script:CleanupDone = $false
 $script:CurrentStoryId = $null
+$script:StartTime = $null
+$script:IterationCount = 0
 
 <#
 .SYNOPSIS
@@ -2099,7 +2102,8 @@ function Register-RalphCleanup {
     Performs cleanup on shutdown.
 
 .DESCRIPTION
-    Releases locks, updates status, and stashes uncommitted changes.
+    Releases locks, updates status, stashes uncommitted changes, and logs
+    a termination summary. Safe to call multiple times (no-op after first call).
 
 .EXAMPLE
     Invoke-RalphCleanup
@@ -2108,7 +2112,21 @@ function Invoke-RalphCleanup {
     [CmdletBinding()]
     param()
 
-    Add-RalphInstanceLog "Shutting down instance..."
+    # Guard against double cleanup (both finally block and PowerShell.Exiting may fire)
+    if ($script:CleanupDone) {
+        return
+    }
+    $script:CleanupDone = $true
+
+    # Log termination summary first
+    try {
+        $summary = Get-RalphTerminationSummary
+        Add-RalphInstanceLog $summary
+        Write-Host "`n$summary" -ForegroundColor Yellow
+    }
+    catch {
+        Add-RalphInstanceLog "Shutting down instance... (summary unavailable)"
+    }
 
     # Update status
     try {
@@ -2179,6 +2197,123 @@ function Set-RalphCurrentStory {
     )
 
     $script:CurrentStoryId = $StoryId
+}
+
+<#
+.SYNOPSIS
+    Initializes the start time for tracking session duration.
+
+.DESCRIPTION
+    Should be called when ralph starts to enable elapsed time calculation
+    in the termination summary. Also initializes the iteration counter.
+
+.EXAMPLE
+    Initialize-RalphSessionTracking
+#>
+function Initialize-RalphSessionTracking {
+    [CmdletBinding()]
+    param()
+
+    $script:StartTime = Get-Date
+    $script:IterationCount = 0
+}
+
+<#
+.SYNOPSIS
+    Updates the iteration count for tracking progress.
+
+.PARAMETER Iteration
+    The current iteration number.
+
+.EXAMPLE
+    Update-RalphIterationCount -Iteration 5
+#>
+function Update-RalphIterationCount {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Iteration
+    )
+
+    $script:IterationCount = $Iteration
+}
+
+<#
+.SYNOPSIS
+    Gets a termination summary for logging.
+
+.DESCRIPTION
+    Generates a summary of the session including elapsed time, iteration count,
+    completed stories, and any held locks at shutdown.
+
+.OUTPUTS
+    System.String
+    A formatted termination summary string.
+
+.EXAMPLE
+    $summary = Get-RalphTerminationSummary
+#>
+function Get-RalphTerminationSummary {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $lines = @()
+    $lines += "=== TERMINATION SUMMARY ==="
+    $lines += "Instance: $(Get-RalphShortId)"
+
+    # Elapsed time
+    if ($script:StartTime) {
+        $elapsed = (Get-Date) - $script:StartTime
+        $lines += "Elapsed time: $([int]$elapsed.TotalMinutes) minutes $($elapsed.Seconds) seconds"
+    }
+    else {
+        $lines += "Elapsed time: Unknown (session tracking not initialized)"
+    }
+
+    # Iteration count
+    $lines += "Iterations completed: $($script:IterationCount)"
+
+    # Current story at shutdown
+    if ($script:CurrentStoryId) {
+        $lines += "Story in progress at shutdown: $($script:CurrentStoryId)"
+    }
+    else {
+        $lines += "No story in progress at shutdown"
+    }
+
+    # PRD status
+    try {
+        $prd = Read-RalphPrdSafe
+        if ($prd -and $prd.userStories) {
+            $completed = @($prd.userStories | Where-Object { $_.passes -eq $true }).Count
+            $total = $prd.userStories.Count
+            $lines += "PRD status: $completed / $total stories complete"
+        }
+    }
+    catch {
+        $lines += "PRD status: Unable to read"
+    }
+
+    # Locks held
+    try {
+        $instanceId = Get-RalphInstanceId
+        $heldLocks = @(Get-RalphStoryLocks | Where-Object { $_.Owner -eq $instanceId })
+        if ($heldLocks.Count -gt 0) {
+            $lockList = ($heldLocks | ForEach-Object { $_.StoryId }) -join ', '
+            $lines += "Locks to release: $lockList"
+        }
+        else {
+            $lines += "No locks held"
+        }
+    }
+    catch {
+        $lines += "Lock status: Unable to check"
+    }
+
+    $lines += "==========================="
+
+    return $lines -join "`n"
 }
 
 # =============================================================================
@@ -3381,6 +3516,9 @@ Export-ModuleMember -Function @(
     'Register-RalphCleanup'
     'Invoke-RalphCleanup'
     'Set-RalphCurrentStory'
+    'Initialize-RalphSessionTracking'
+    'Update-RalphIterationCount'
+    'Get-RalphTerminationSummary'
     # Global registry functions (GM-001, PS-004)
     'Get-RalphGlobalDir'
     'Initialize-RalphGlobalRegistry'
