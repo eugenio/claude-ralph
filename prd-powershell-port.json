@@ -201,9 +201,9 @@
         "Test stale lock detection and cleanup",
         "All tests pass: Invoke-Pester returns 0 failures"
       ],
-      "passes": false,
+      "passes": true,
       "notes": "Use Pester Describe/Context/It structure. Mock filesystem for isolation.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-12320-1770200476"
+      "claimedBy": null
     },
     {
       "id": "PS-013",
@@ -220,7 +220,7 @@
       ],
       "passes": false,
       "notes": "Test scripts can be invoked. Use TestDrive: for temp files.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-37736-1770200479"
+      "claimedBy": "eugen-FRAMEWORK16-UGE-27656-1770200951"
     },
     {
       "id": "PS-014",
@@ -237,7 +237,7 @@
       ],
       "passes": false,
       "notes": "Use subshells to simulate concurrent instances. Check file contents after operations.",
-      "claimedBy": "eugen-FRAMEWORK16-UGE-40148-1770200483"
+      "claimedBy": "eugen-FRAMEWORK16-UGE-1460-1770200947"
     },
     {
       "id": "PS-015",
@@ -254,7 +254,7 @@
       ],
       "passes": false,
       "notes": "Integration tests for all helper scripts.",
-      "claimedBy": null
+      "claimedBy": "eugen-FRAMEWORK16-UGE-21412-1770200955"
     },
     {
       "id": "PS-016",
