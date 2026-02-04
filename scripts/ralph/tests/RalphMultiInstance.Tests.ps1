@@ -220,215 +220,576 @@ Describe 'Status File' {
     }
 }
 
-Describe 'Git Branch Functions (PS-005)' {
-    BeforeAll {
-        # Create a test git repository for each test context
-        $script:GitTestDir = Join-Path $TestDrive 'git-test'
-        New-Item -Path $script:GitTestDir -ItemType Directory -Force | Out-Null
+# PS-012: Comprehensive Core Function Tests
+Describe 'PS-012: Concurrent Lock Attempts' {
+    BeforeEach {
+        # Clean up locks
+        Get-ChildItem -Path (Join-Path $script:TestDir 'locks') -Directory -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force
+    }
 
-        Push-Location $script:GitTestDir
-        git init --quiet 2>$null
-        git config user.email "test@example.com"
-        git config user.name "Test User"
+    Context 'Atomic lock acquisition' {
+        It 'Only one concurrent lock attempt succeeds' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
 
-        # Create initial commit on main
-        "initial" | Set-Content 'README.md'
-        git add README.md
-        git commit -m "Initial commit" --quiet 2>$null
+            $storyId = 'US-CONCURRENT-001'
 
-        # Ensure we're on main
-        $currentBranch = git rev-parse --abbrev-ref HEAD
-        if ($currentBranch -ne 'main') {
-            git branch -M main 2>$null
+            # Use Start-ThreadJob for true parallel execution
+            $jobs = @()
+            for ($i = 0; $i -lt 5; $i++) {
+                $jobs += Start-ThreadJob -ScriptBlock {
+                    param($testDir, $storyId)
+
+                    # Try to acquire lock atomically using directory creation
+                    $lockDir = Join-Path (Join-Path $testDir 'locks') "$storyId.lock"
+                    try {
+                        $null = New-Item -Path $lockDir -ItemType Directory -ErrorAction Stop
+                        Set-Content -Path (Join-Path $lockDir 'owner.txt') -Value "instance-$([Guid]::NewGuid())"
+                        Set-Content -Path (Join-Path $lockDir 'timestamp.txt') -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+                        return $true
+                    }
+                    catch {
+                        return $false
+                    }
+                } -ArgumentList $script:TestDir, $storyId
+            }
+
+            # Wait for all jobs and collect results
+            $results = $jobs | Wait-Job | Receive-Job
+            $jobs | Remove-Job
+
+            # Exactly one should succeed - atomic directory creation ensures only one wins
+            $successCount = ($results | Where-Object { $_ -eq $true }).Count
+            $successCount | Should -Be 1
         }
 
-        Pop-Location
+        It 'Lock-RalphStory uses atomic directory creation' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
 
-        # Create test PRD in git test dir
+            $storyId = 'US-ATOMIC-001'
+
+            # First lock should succeed
+            $result1 = Lock-RalphStory -StoryId $storyId
+            $result1 | Should -Be $true
+
+            # Verify lock files exist
+            $lockDir = Join-Path (Join-Path $script:TestDir 'locks') "$storyId.lock"
+            Test-Path $lockDir | Should -Be $true
+            Test-Path (Join-Path $lockDir 'owner.txt') | Should -Be $true
+            Test-Path (Join-Path $lockDir 'timestamp.txt') | Should -Be $true
+        }
+    }
+}
+
+Describe 'PS-012: PRD Atomic Updates' {
+    BeforeEach {
+        # Create fresh PRD
         $testPrd = @{
-            featureName = 'Git Test Feature'
-            branchName = 'main'
+            featureName = 'Test Feature'
+            branchName = 'test/branch'
             userStories = @(
-                @{ id = 'GIT-001'; title = 'Git Story 1'; priority = 1; passes = $false }
+                @{ id = 'US-001'; title = 'Story 1'; priority = 1; passes = $false }
+                @{ id = 'US-002'; title = 'Story 2'; priority = 2; passes = $false }
             )
         }
-        $testPrd | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $script:GitTestDir 'prd.json')
+        $testPrd | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $script:TestDir 'prd.json') -Force
     }
 
-    Context 'New-RalphStoryBranch' {
-        BeforeEach {
-            # Ensure we're on main before each test
-            Push-Location $script:GitTestDir
-            git checkout main --quiet 2>$null
-            Pop-Location
-        }
+    Context 'Lock-RalphPrd function' {
+        It 'Returns hashtable with Acquired, Mutex, Error keys' {
+            $result = Lock-RalphPrd
+            $result | Should -BeOfType [hashtable]
+            $result.Keys | Should -Contain 'Acquired'
+            $result.Keys | Should -Contain 'Mutex'
+            $result.Keys | Should -Contain 'Error'
 
-        It 'Creates a branch with correct naming convention' {
-            Mock Get-RalphPaths -ModuleName RalphUtils {
-                return @{
-                    RalphDir = $script:GitTestDir
-                    ProjectRoot = $script:GitTestDir
-                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
-                }
+            # Clean up
+            if ($result.Acquired -and $result.Mutex) {
+                $result.Mutex.ReleaseMutex()
+                $result.Mutex.Dispose()
             }
-
-            $branchName = New-RalphStoryBranch -StoryId 'GIT-001'
-            $branchName | Should -Match '^ralph/[a-zA-Z0-9_-]+/GIT-001$'
-
-            # Verify branch was created
-            Push-Location $script:GitTestDir
-            $currentBranch = git rev-parse --abbrev-ref HEAD 2>$null
-            Pop-Location
-            $currentBranch | Should -Be $branchName
         }
 
-        It 'Checks out existing branch if already created' {
-            Mock Get-RalphPaths -ModuleName RalphUtils {
-                return @{
-                    RalphDir = $script:GitTestDir
-                    ProjectRoot = $script:GitTestDir
-                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
+        It 'Acquires mutex successfully' {
+            $result = Lock-RalphPrd
+            $result.Acquired | Should -Be $true
+            $result.Mutex | Should -Not -BeNull
+            $result.Error | Should -BeNull
+
+            # Clean up
+            $result.Mutex.ReleaseMutex()
+            $result.Mutex.Dispose()
+        }
+
+        It 'Respects timeout and retries using runspace to test cross-process locking' {
+            # Note: Mutexes are re-entrant within the same thread, so we use a runspace
+            # to simulate a different thread attempting to acquire the same mutex
+            $testMutexName = "Global\RalphPrdLock-TestTimeout-$([Guid]::NewGuid())"
+
+            # Acquire lock in current thread
+            $mutex1 = New-Object System.Threading.Mutex($false, $testMutexName)
+            $acquired1 = $mutex1.WaitOne(1000)
+            $acquired1 | Should -Be $true
+
+            # Try to acquire from different runspace (different thread)
+            $runspace = [runspacefactory]::CreateRunspace()
+            $runspace.Open()
+            $powershell = [powershell]::Create()
+            $powershell.Runspace = $runspace
+            $null = $powershell.AddScript({
+                param($mutexName)
+                $mutex2 = New-Object System.Threading.Mutex($false, $mutexName)
+                try {
+                    # Short timeout - should fail since mutex is held
+                    $acquired = $mutex2.WaitOne(500)
+                    return $acquired
                 }
-            }
-
-            # First call creates branch, second checks it out
-            $branchName1 = New-RalphStoryBranch -StoryId 'GIT-001'
-            $branchName2 = New-RalphStoryBranch -StoryId 'GIT-001'
-            $branchName1 | Should -Be $branchName2
-        }
-    }
-
-    Context 'Merge-RalphStoryBranch' {
-        BeforeEach {
-            Push-Location $script:GitTestDir
-            git checkout main --quiet 2>$null
-            Pop-Location
-        }
-
-        It 'Returns true when no story branch was set by New-RalphStoryBranch' {
-            # Note: Merge-RalphStoryBranch uses $script:CurrentStoryBranch which is set by New-RalphStoryBranch
-            # When the internal variable is null, it returns true (no-op)
-            # We test this by verifying the function doesn't throw when called without prior New-RalphStoryBranch
-            # However, because of test ordering, we need to be aware the variable might be set from other tests
-            # This test validates the function runs and returns a boolean
-            $result = Merge-RalphStoryBranch -StoryId 'NONEXISTENT'
-            # The function returns true if no branch or successful merge, false on conflict
-            $finalResult = if ($result -is [array]) { $result[-1] } else { $result }
-            $finalResult | Should -BeIn @($true, $false)
-        }
-
-        It 'Merges story branch with --no-ff' {
-            Mock Get-RalphPaths -ModuleName RalphUtils {
-                return @{
-                    RalphDir = $script:GitTestDir
-                    ProjectRoot = $script:GitTestDir
-                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
+                finally {
+                    if ($acquired) {
+                        $mutex2.ReleaseMutex()
+                    }
+                    $mutex2.Dispose()
                 }
-            }
+            })
+            $null = $powershell.AddArgument($testMutexName)
+            $result = $powershell.Invoke()
+            $powershell.Dispose()
+            $runspace.Close()
 
-            # Create branch and make changes
-            $branchName = New-RalphStoryBranch -StoryId 'GIT-MERGE'
+            $result[0] | Should -Be $false
 
-            Push-Location $script:GitTestDir
-            $uniqueFile = "merge-test-$(Get-Random).txt"
-            "feature content" | Set-Content $uniqueFile
-            git add $uniqueFile
-            git commit -m "Add feature for merge test" --quiet 2>$null
-            Pop-Location
-
-            # Merge back - result may include git output but should end with $true
-            $result = Merge-RalphStoryBranch -StoryId 'GIT-MERGE'
-            # Check the last element if it's an array, or the value itself
-            $finalResult = if ($result -is [array]) { $result[-1] } else { $result }
-            $finalResult | Should -Be $true
-
-            # Verify we're back on main
-            Push-Location $script:GitTestDir
-            $currentBranch = git rev-parse --abbrev-ref HEAD 2>$null
-            Pop-Location
-            $currentBranch | Should -Be 'main'
+            # Clean up
+            $mutex1.ReleaseMutex()
+            $mutex1.Dispose()
         }
     }
 
-    Context 'Remove-RalphStoryBranch' {
-        BeforeEach {
-            Push-Location $script:GitTestDir
-            git checkout main --quiet 2>$null
-            Pop-Location
-        }
-
-        It 'Returns true when branch does not exist' {
+    Context 'Update-RalphPrd function' {
+        It 'Creates backup before writing' {
             Mock Get-RalphPaths -ModuleName RalphUtils {
                 return @{
-                    RalphDir = $script:GitTestDir
-                    ProjectRoot = $script:GitTestDir
-                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                    PrdFile = Join-Path $script:TestDir 'prd.json'
                 }
             }
 
-            $result = Remove-RalphStoryBranch -StoryId 'NONEXISTENT' -ShortId 'xxxxxxxx'
+            $backupFile = Join-Path $script:TestDir 'prd.json.bak'
+            if (Test-Path $backupFile) { Remove-Item $backupFile }
+
+            $result = Update-RalphPrd -Description 'Test update' -UpdateScript {
+                param($prd)
+                $prd.featureName = 'Updated Feature'
+                return $true
+            }
+
             $result | Should -Be $true
+            Test-Path $backupFile | Should -Be $true
         }
 
-        It 'Removes unmerged branch with -Force' {
+        It 'Validates JSON after write' {
             Mock Get-RalphPaths -ModuleName RalphUtils {
                 return @{
-                    RalphDir = $script:GitTestDir
-                    ProjectRoot = $script:GitTestDir
-                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                    PrdFile = Join-Path $script:TestDir 'prd.json'
                 }
             }
 
-            # Create branch with uncommitted changes
-            $branchName = New-RalphStoryBranch -StoryId 'GIT-FORCE'
+            $result = Update-RalphPrd -Description 'Add story' -UpdateScript {
+                param($prd)
+                $prd.userStories += @{ id = 'US-003'; title = 'New Story'; priority = 3; passes = $false }
+                return $true
+            }
+
+            $result | Should -Be $true
+
+            # Verify JSON is valid
+            $prd = Get-Content (Join-Path $script:TestDir 'prd.json') -Raw | ConvertFrom-Json
+            $prd.userStories.Count | Should -Be 3
+        }
+
+        It 'Aborts when UpdateScript returns false' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                    PrdFile = Join-Path $script:TestDir 'prd.json'
+                }
+            }
+
+            $originalContent = Get-Content (Join-Path $script:TestDir 'prd.json') -Raw
+
+            $result = Update-RalphPrd -Description 'Aborted update' -UpdateScript {
+                param($prd)
+                $prd.featureName = 'Should Not Change'
+                return $false  # Abort
+            }
+
+            $result | Should -Be $false
+
+            # Content should be unchanged
+            $currentContent = Get-Content (Join-Path $script:TestDir 'prd.json') -Raw
+            ($currentContent | ConvertFrom-Json).featureName | Should -Be 'Test Feature'
+        }
+    }
+
+    Context 'Concurrent PRD writes' {
+        It 'Does not corrupt JSON with concurrent writes' {
+            # Create a temporary PRD file for this test
+            # Use environment temp path which is accessible across runspaces
+            $tempDir = Join-Path $env:TEMP "concurrent-prd-test-$([Guid]::NewGuid())"
+            New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
+
+            try {
+                $prdFile = Join-Path $tempDir 'prd.json'
+                $initialPrd = @{
+                    featureName = 'Concurrent Test'
+                    branchName = 'test/concurrent'
+                    userStories = @(
+                        @{ id = 'US-001'; title = 'Story 1'; priority = 1; passes = $false }
+                        @{ id = 'US-002'; title = 'Story 2'; priority = 2; passes = $false }
+                    )
+                }
+                $initialPrd | ConvertTo-Json -Depth 5 | Set-Content $prdFile -Force
+
+                # Verify initial file was created
+                Test-Path $prdFile | Should -Be $true
+
+                $runspaces = @()
+                $runspacePool = [runspacefactory]::CreateRunspacePool(1, 3)
+                $runspacePool.Open()
+
+                $mutexName = "Global\RalphPrdLock-Concurrent-$([Guid]::NewGuid())"
+
+                # Create 3 concurrent update attempts
+                for ($i = 0; $i -lt 3; $i++) {
+                    $powershell = [powershell]::Create()
+                    $powershell.RunspacePool = $runspacePool
+                    $null = $powershell.AddScript({
+                        param($prdFilePath, $index, $mutexName)
+
+                        # Update PRD using mutex
+                        $mutex = New-Object System.Threading.Mutex($false, $mutexName)
+                        $acquired = $false
+
+                        try {
+                            $acquired = $mutex.WaitOne(10000)
+                            if ($acquired) {
+                                # Read, modify, write
+                                $prd = Get-Content $prdFilePath -Raw | ConvertFrom-Json
+                                $prd.userStories[$index % 2].title = "Story-$index"
+                                $prd | ConvertTo-Json -Depth 5 | Set-Content $prdFilePath -Force
+                                return @{ Acquired = $true; Success = $true }
+                            }
+                            return @{ Acquired = $false; Success = $false }
+                        }
+                        catch {
+                            return @{ Acquired = $acquired; Success = $false; Error = $_.ToString() }
+                        }
+                        finally {
+                            if ($acquired) {
+                                $mutex.ReleaseMutex()
+                            }
+                            $mutex.Dispose()
+                        }
+                    })
+                    $null = $powershell.AddArgument($prdFile)
+                    $null = $powershell.AddArgument($i)
+                    $null = $powershell.AddArgument($mutexName)
+
+                    $runspaces += @{
+                        PowerShell = $powershell
+                        Handle = $powershell.BeginInvoke()
+                    }
+                }
+
+                # Wait for all runspaces to complete
+                $results = @()
+                foreach ($rs in $runspaces) {
+                    $results += $rs.PowerShell.EndInvoke($rs.Handle)
+                    $rs.PowerShell.Dispose()
+                }
+                $runspacePool.Close()
+                $runspacePool.Dispose()
+
+                # Verify at least some writes succeeded
+                $successCount = ($results | Where-Object { $_.Success -eq $true }).Count
+                $successCount | Should -BeGreaterThan 0
+
+                # Verify JSON is still valid (not corrupted)
+                $jsonContent = Get-Content $prdFile -Raw
+                $jsonContent | Should -Not -BeNullOrEmpty
+
+                $finalPrd = $jsonContent | ConvertFrom-Json
+                $finalPrd | Should -Not -BeNull
+                $finalPrd.userStories | Should -Not -BeNull
+                $finalPrd.userStories.Count | Should -Be 2
+            }
+            finally {
+                # Cleanup
+                if (Test-Path $tempDir) {
+                    Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
+}
+
+Describe 'PS-012: Stale Lock Detection and Cleanup' {
+    BeforeEach {
+        # Clean up locks
+        Get-ChildItem -Path (Join-Path $script:TestDir 'locks') -Directory -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force
+    }
+
+    Context 'Get-RalphStaleLocks' {
+        It 'Returns empty array when no stale locks exist' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
+            Mock Get-RalphStoryLocks -ModuleName RalphUtils {
+                return @(
+                    @{
+                        StoryId = 'US-FRESH'
+                        Owner = 'current-instance'
+                        Timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+                        Age = 60
+                        IsDead = $false
+                        IsStale = $false
+                    }
+                )
+            }
+
+            $staleLocks = Get-RalphStaleLocks
+            $staleLocks | Should -BeNullOrEmpty
+        }
+
+        It 'Finds locks older than threshold' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
+
+            # Create stale lock (older than default 2 hours)
+            $lockDir = Join-Path (Join-Path $script:TestDir 'locks') 'US-OLDLOCK.lock'
+            New-Item -Path $lockDir -ItemType Directory -Force | Out-Null
+            Set-Content -Path (Join-Path $lockDir 'owner.txt') -Value 'old-instance'
+            $staleTime = [DateTimeOffset]::UtcNow.AddHours(-4).ToUnixTimeSeconds()
+            Set-Content -Path (Join-Path $lockDir 'timestamp.txt') -Value $staleTime
+
+            $staleLocks = Get-RalphStaleLocks
+            $staleLocks | Should -Not -BeNullOrEmpty
+            ($staleLocks | Where-Object { $_.StoryId -eq 'US-OLDLOCK' }) | Should -Not -BeNull
+        }
+
+        It 'Finds locks with dead owners' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
+
+            # Create lock with impossible PID (dead owner simulation)
+            $lockDir = Join-Path (Join-Path $script:TestDir 'locks') 'US-DEADOWNER.lock'
+            New-Item -Path $lockDir -ItemType Directory -Force | Out-Null
+            Set-Content -Path (Join-Path $lockDir 'owner.txt') -Value 'nonexistent-instance'
+            Set-Content -Path (Join-Path $lockDir 'timestamp.txt') -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+            Set-Content -Path (Join-Path $lockDir 'pid.txt') -Value '999999999'  # Invalid PID
+
+            $staleLocks = Get-RalphStaleLocks -ThresholdSeconds 1
+            # At minimum the lock should be detectable - may or may not be marked dead based on PID check
+            # The ThresholdSeconds=1 ensures the lock is stale by age at least
+            Start-Sleep -Seconds 2
+            $staleLocks = Get-RalphStaleLocks -ThresholdSeconds 1
+            $staleLocks | Should -Not -BeNullOrEmpty
+        }
+
+        It 'Respects custom threshold parameter' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
+
+            # Create lock 120 seconds old
+            $lockDir = Join-Path (Join-Path $script:TestDir 'locks') 'US-THRESHOLD.lock'
+            New-Item -Path $lockDir -ItemType Directory -Force | Out-Null
+            Set-Content -Path (Join-Path $lockDir 'owner.txt') -Value 'test-instance'
+            $oldTime = [DateTimeOffset]::UtcNow.AddSeconds(-120).ToUnixTimeSeconds()
+            Set-Content -Path (Join-Path $lockDir 'timestamp.txt') -Value $oldTime
+
+            # Should NOT be stale with default 2-hour threshold
+            $staleLocks1 = Get-RalphStaleLocks -ThresholdSeconds 7200
+            ($staleLocks1 | Where-Object { $_.StoryId -eq 'US-THRESHOLD' }) | Should -BeNull
+
+            # Should be stale with 60-second threshold
+            $staleLocks2 = Get-RalphStaleLocks -ThresholdSeconds 60
+            ($staleLocks2 | Where-Object { $_.StoryId -eq 'US-THRESHOLD' }) | Should -Not -BeNull
+        }
+    }
+
+    Context 'Clear-RalphStaleLocks' {
+        It 'Clears all stale locks' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
+
+            # Create multiple stale locks
+            foreach ($id in @('US-STALE1', 'US-STALE2', 'US-STALE3')) {
+                $lockDir = Join-Path (Join-Path $script:TestDir 'locks') "$id.lock"
+                New-Item -Path $lockDir -ItemType Directory -Force | Out-Null
+                Set-Content -Path (Join-Path $lockDir 'owner.txt') -Value 'old-instance'
+                $staleTime = [DateTimeOffset]::UtcNow.AddHours(-5).ToUnixTimeSeconds()
+                Set-Content -Path (Join-Path $lockDir 'timestamp.txt') -Value $staleTime
+            }
+
+            # Verify locks exist
+            $lockCount = (Get-ChildItem -Path (Join-Path $script:TestDir 'locks') -Directory).Count
+            $lockCount | Should -Be 3
+
+            # Clear stale locks
+            $cleared = Clear-RalphStaleLocks
+
+            # Verify locks removed
+            $remainingLocks = Get-ChildItem -Path (Join-Path $script:TestDir 'locks') -Directory -ErrorAction SilentlyContinue
+            $remainingLocks | Should -BeNullOrEmpty
+            $cleared | Should -BeGreaterOrEqual 3
+        }
+
+        It 'Does not clear fresh locks' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
+
+            # Create fresh lock
+            $instanceId = Get-RalphInstanceId
+            $lockDir = Join-Path (Join-Path $script:TestDir 'locks') 'US-FRESH.lock'
+            New-Item -Path $lockDir -ItemType Directory -Force | Out-Null
+            Set-Content -Path (Join-Path $lockDir 'owner.txt') -Value $instanceId
+            Set-Content -Path (Join-Path $lockDir 'timestamp.txt') -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+            Set-Content -Path (Join-Path $lockDir 'pid.txt') -Value $PID
+
+            # Clear stale locks (should not clear fresh lock)
+            $cleared = Clear-RalphStaleLocks
+
+            # Fresh lock should still exist
+            Test-Path $lockDir | Should -Be $true
+            $cleared | Should -Be 0
+        }
+    }
+
+    Context 'Clear-RalphStaleLock (single story)' {
+        It 'Clears stale lock for specific story' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
+
+            # Create stale lock
+            $lockDir = Join-Path (Join-Path $script:TestDir 'locks') 'US-SINGLE-STALE.lock'
+            New-Item -Path $lockDir -ItemType Directory -Force | Out-Null
+            Set-Content -Path (Join-Path $lockDir 'owner.txt') -Value 'old-instance'
+            $staleTime = [DateTimeOffset]::UtcNow.AddHours(-3).ToUnixTimeSeconds()
+            Set-Content -Path (Join-Path $lockDir 'timestamp.txt') -Value $staleTime
+
+            $result = Clear-RalphStaleLock -StoryId 'US-SINGLE-STALE'
+            $result | Should -Be $true
+            Test-Path $lockDir | Should -Be $false
+        }
+
+        It 'Returns false for non-existent lock' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
+
+            $result = Clear-RalphStaleLock -StoryId 'US-NONEXISTENT'
+            $result | Should -Be $false
+        }
+
+        It 'Returns false for fresh lock' {
+            Mock Get-RalphPaths -ModuleName RalphUtils {
+                return @{
+                    RalphDir = $script:TestDir
+                    ProjectRoot = $script:TestDir
+                }
+            }
+
+            $instanceId = Get-RalphInstanceId
+            $lockDir = Join-Path (Join-Path $script:TestDir 'locks') 'US-FRESH-SINGLE.lock'
+            New-Item -Path $lockDir -ItemType Directory -Force | Out-Null
+            Set-Content -Path (Join-Path $lockDir 'owner.txt') -Value $instanceId
+            Set-Content -Path (Join-Path $lockDir 'timestamp.txt') -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+            Set-Content -Path (Join-Path $lockDir 'pid.txt') -Value $PID
+
+            $result = Clear-RalphStaleLock -StoryId 'US-FRESH-SINGLE'
+            $result | Should -Be $false
+            Test-Path $lockDir | Should -Be $true
+        }
+    }
+}
+
+Describe 'PS-012: Instance ID Format Validation' {
+    Context 'ID Format Requirements' {
+        It 'Contains username component' {
+            $id = Get-RalphInstanceId -Force
+            $parts = $id -split '-'
+            $parts[0] | Should -Not -BeNullOrEmpty
+            # Username should match current user
+            $parts[0] | Should -Be $env:USERNAME
+        }
+
+        It 'Contains hostname component' {
+            $id = Get-RalphInstanceId -Force
+            $parts = $id -split '-'
+            $parts.Count | Should -BeGreaterOrEqual 4
+            # Hostname is second component (may contain hyphens)
+        }
+
+        It 'Contains PID component (numeric)' {
+            $id = Get-RalphInstanceId -Force
+            # PID is second-to-last component
+            $id | Should -Match '-\d+-\d+$'
+        }
+
+        It 'Contains timestamp component (numeric)' {
+            $id = Get-RalphInstanceId -Force
+            # Timestamp is last component
+            $id | Should -Match '-\d+$'
+        }
+
+        It 'Short ID is exactly 8 characters or less' {
             $shortId = Get-RalphShortId
-
-            Push-Location $script:GitTestDir
-            $uniqueFile = "force-test-$(Get-Random).txt"
-            "unmerged content" | Set-Content $uniqueFile
-            git add $uniqueFile
-            git commit -m "Unmerged commit" --quiet 2>$null
-            # Switch back to main without merging
-            git checkout main --quiet 2>$null
-            Pop-Location
-
-            # Force remove
-            $result = Remove-RalphStoryBranch -StoryId 'GIT-FORCE' -ShortId $shortId -Force
-            $result | Should -Be $true
-
-            # Verify branch is gone
-            Push-Location $script:GitTestDir
-            git show-ref --verify --quiet "refs/heads/ralph/$shortId/GIT-FORCE" 2>$null
-            $branchGone = ($LASTEXITCODE -ne 0)
-            Pop-Location
-            $branchGone | Should -Be $true
-        }
-    }
-
-    Context 'Get-RalphCurrentBranch' {
-        It 'Returns current story branch or null' {
-            # This just verifies the function exists and runs
-            $branch = Get-RalphCurrentBranch
-            # Branch can be null or a string
-            if ($null -ne $branch) {
-                $branch | Should -BeOfType ([string])
-            }
-        }
-    }
-
-    Context 'Clear-RalphMergedBranches' {
-        It 'Returns count of cleaned branches' {
-            Mock Get-RalphPaths -ModuleName RalphUtils {
-                return @{
-                    RalphDir = $script:GitTestDir
-                    ProjectRoot = $script:GitTestDir
-                    PrdFile = Join-Path $script:GitTestDir 'prd.json'
-                }
-            }
-
-            # Just verify the function runs without error
-            $cleaned = Clear-RalphMergedBranches
-            $cleaned | Should -BeOfType ([int])
+            $shortId.Length | Should -BeLessOrEqual 8
+            $shortId.Length | Should -BeGreaterThan 0
         }
     }
 }

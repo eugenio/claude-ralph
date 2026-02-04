@@ -590,3 +590,25 @@ Each test file covers:
 - **Install skills globally**: Run `./scripts/ralph/install-skills.sh` (or `.ps1`) once for better interactive experience
 - **Cross-platform**: Use PowerShell scripts on Windows, bash or PowerShell on macOS/Linux
 - **Use pwsh**: Always invoke PowerShell scripts with `pwsh` command for cross-platform compatibility
+
+## Additional Documentation
+
+For more detailed guides, see:
+
+- **[Multi-Instance Guide](scripts/ralph/docs/multi-instance.md)** - Detailed parallel execution, locking, and monitoring
+- **[PowerShell Guide](scripts/ralph/docs/powershell-guide.md)** - Complete PowerShell usage, module reference, and troubleshooting
+
+## Platform Compatibility
+
+Ralph is tested on:
+- Windows 10/11 with Git Bash and PowerShell 7+
+- macOS with Bash and PowerShell 7+
+- Ubuntu/Debian Linux with Bash and PowerShell 7+
+
+### Cross-Platform Interoperability
+
+Bash and PowerShell implementations are fully compatible:
+- Same lock format (`locks/{story-id}.lock/` directory with owner.txt, timestamp.txt, pid.txt)
+- Same status.json structure
+- Same PRD format with `claimedBy` field
+- Same instance ID format (`{user}-{hostname}-{pid}-{timestamp}`)

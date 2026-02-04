@@ -702,11 +702,14 @@ EOF
     # Initialize status
     update_ralph_status "starting" "" 0 10 ""
 
+    # Output variables including the cached instance ID so they persist in parent shell
     cat <<EOF
 INSTANCE_DIR="$instance_dir"
 INSTANCE_LOG_FILE="$instance_log_file"
 INSTANCE_PROGRESS_FILE="$instance_progress_file"
 INSTANCE_STATUS_FILE="$instance_status_file"
+_RALPH_INSTANCE_ID="$instance_id"
+_RALPH_INSTANCE_SHORT_ID="$short_id"
 EOF
 }
 
@@ -881,7 +884,7 @@ add_ralph_instance_log() {
     local entry="[$timestamp] [$short_id] $message"
 
     echo "$entry" >> "$log_file"
-    echo "$entry"
+    echo "$entry" >&2  # Output to stderr so it doesn't interfere with function return values
 }
 
 # =============================================================================
@@ -1097,14 +1100,21 @@ get_ralph_story_locks() {
 clear_ralph_stale_lock() {
     local story_id="$1"
 
-    local lock_info
-    if ! lock_info=$(get_ralph_story_lock "$story_id" 2>/dev/null); then
+    local lock_info=""
+    lock_info=$(get_ralph_story_lock "$story_id" 2>/dev/null) || true
+
+    if [[ -z "$lock_info" ]]; then
         return 1
     fi
 
     local age is_dead
-    age=$(echo "$lock_info" | jq -r '.age')
-    is_dead=$(echo "$lock_info" | jq -r '.isDead')
+    age=$(echo "$lock_info" | jq -r '.age' 2>/dev/null) || age=""
+    is_dead=$(echo "$lock_info" | jq -r '.isDead' 2>/dev/null) || is_dead="false"
+
+    # Validate age is a number
+    if [[ -z "$age" || ! "$age" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
 
     local stale_timeout="${RALPH_LOCK_TIMEOUT:-7200}"  # 2 hours default
 
@@ -1137,11 +1147,12 @@ clear_ralph_stale_locks() {
     locks_json=$(get_ralph_story_locks)
 
     local story_ids
-    story_ids=$(echo "$locks_json" | jq -r '.[].storyId')
+    # Strip carriage returns for Windows/Git Bash compatibility
+    story_ids=$(echo "$locks_json" | jq -r '.[].storyId' | tr -d '\r')
 
     for story_id in $story_ids; do
         if clear_ralph_stale_lock "$story_id"; then
-            ((cleared++))
+            cleared=$((cleared + 1))
         fi
     done
 
@@ -1161,11 +1172,12 @@ clear_ralph_instance_locks() {
     locks_json=$(get_ralph_story_locks)
 
     local owned_stories
-    owned_stories=$(echo "$locks_json" | jq -r --arg owner "$instance_id" '.[] | select(.owner == $owner) | .storyId')
+    # Strip carriage returns for Windows/Git Bash compatibility
+    owned_stories=$(echo "$locks_json" | jq -r --arg owner "$instance_id" '.[] | select(.owner == $owner) | .storyId' | tr -d '\r')
 
     for story_id in $owned_stories; do
         if unlock_ralph_story "$story_id"; then
-            ((released++))
+            released=$((released + 1))
         fi
     done
 
@@ -1383,7 +1395,7 @@ request_ralph_next_story_claim() {
         fi
 
         # No stories available
-        ((retry++))
+        retry=$((retry + 1))
         if [[ "$retry" -lt "$max_retries" ]]; then
             add_ralph_instance_log "No available stories, waiting ${retry_delay}s (retry $retry/$max_retries)"
             sleep "$retry_delay"

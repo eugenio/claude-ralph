@@ -1236,6 +1236,53 @@ function Get-RalphStoryLocks {
 
 <#
 .SYNOPSIS
+    Gets all stale locks.
+
+.DESCRIPTION
+    Returns locks that are older than the specified threshold or have dead owners.
+    Threshold defaults to RALPH_LOCK_TIMEOUT environment variable (2 hours = 7200 seconds).
+
+.PARAMETER ThresholdSeconds
+    Optional threshold in seconds. Locks older than this are considered stale.
+    Default is from $env:RALPH_LOCK_TIMEOUT or 7200 (2 hours).
+
+.OUTPUTS
+    System.Array
+    Array of stale lock information hashtables.
+
+.EXAMPLE
+    $staleLocks = Get-RalphStaleLocks
+    $staleLocks | ForEach-Object { Write-Host "$($_.StoryId) locked by $($_.Owner) for $($_.Age)s" }
+
+.EXAMPLE
+    # Get locks older than 1 hour
+    Get-RalphStaleLocks -ThresholdSeconds 3600
+#>
+function Get-RalphStaleLocks {
+    [CmdletBinding()]
+    [OutputType([array])]
+    param(
+        [Parameter()]
+        [int]$ThresholdSeconds = 0
+    )
+
+    # Use provided threshold, env var, or default 2 hours
+    if ($ThresholdSeconds -le 0) {
+        $ThresholdSeconds = [int]($env:RALPH_LOCK_TIMEOUT ?? 7200)
+    }
+
+    $staleLocks = @()
+    Get-RalphStoryLocks | ForEach-Object {
+        if ($_.Age -gt $ThresholdSeconds -or $_.IsDead) {
+            $staleLocks += $_
+        }
+    }
+
+    return $staleLocks
+}
+
+<#
+.SYNOPSIS
     Clears a stale lock for a specific story.
 
 .DESCRIPTION
@@ -1343,6 +1390,93 @@ function Clear-RalphInstanceLocks {
 
 # Named mutex for cross-process PRD locking
 $script:PrdMutexName = 'Global\RalphPrdLock'
+
+<#
+.SYNOPSIS
+    Acquires an exclusive lock on the PRD file.
+
+.DESCRIPTION
+    Uses a .NET named Mutex for cross-process synchronization to ensure
+    exclusive access to the PRD file. The lock should be released using
+    the returned object's Release() method or by disposing it.
+
+.PARAMETER TimeoutSeconds
+    Maximum time to wait for lock acquisition. Default is 5 seconds.
+
+.PARAMETER MaxRetries
+    Maximum number of retry attempts. Default is 3.
+
+.OUTPUTS
+    System.Collections.Hashtable
+    A hashtable with:
+    - Acquired: Boolean indicating if lock was obtained
+    - Mutex: The Mutex object (dispose after use)
+    - Error: Error message if acquisition failed
+
+.EXAMPLE
+    $lock = Lock-RalphPrd
+    if ($lock.Acquired) {
+        try {
+            # Do exclusive PRD operations
+        }
+        finally {
+            $lock.Mutex.ReleaseMutex()
+            $lock.Mutex.Dispose()
+        }
+    }
+
+.EXAMPLE
+    $lock = Lock-RalphPrd -TimeoutSeconds 10 -MaxRetries 5
+#>
+function Lock-RalphPrd {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [int]$TimeoutSeconds = 5,
+
+        [Parameter()]
+        [int]$MaxRetries = 3
+    )
+
+    $mutex = New-Object System.Threading.Mutex($false, $script:PrdMutexName)
+    $timeoutMs = $TimeoutSeconds * 1000
+    $retry = 0
+
+    while ($retry -lt $MaxRetries) {
+        try {
+            $acquired = $mutex.WaitOne($timeoutMs)
+            if ($acquired) {
+                return @{
+                    Acquired = $true
+                    Mutex    = $mutex
+                    Error    = $null
+                }
+            }
+
+            $retry++
+            if ($retry -lt $MaxRetries) {
+                Add-RalphInstanceLog "PRD lock timeout, retry $retry/$MaxRetries"
+                Start-Sleep -Seconds 1
+            }
+        }
+        catch {
+            $mutex.Dispose()
+            return @{
+                Acquired = $false
+                Mutex    = $null
+                Error    = "Exception acquiring PRD lock: $_"
+            }
+        }
+    }
+
+    $mutex.Dispose()
+    return @{
+        Acquired = $false
+        Mutex    = $null
+        Error    = "Failed to acquire PRD lock after $MaxRetries retries"
+    }
+}
 
 <#
 .SYNOPSIS
@@ -2028,7 +2162,10 @@ function Clear-RalphMergedBranches {
 
 # Script-level cleanup state
 $script:CleanupRegistered = $false
+$script:CleanupDone = $false
 $script:CurrentStoryId = $null
+$script:StartTime = $null
+$script:IterationCount = 0
 
 <#
 .SYNOPSIS
@@ -2061,7 +2198,8 @@ function Register-RalphCleanup {
     Performs cleanup on shutdown.
 
 .DESCRIPTION
-    Releases locks, updates status, and stashes uncommitted changes.
+    Releases locks, updates status, stashes uncommitted changes, and logs
+    a termination summary. Safe to call multiple times (no-op after first call).
 
 .EXAMPLE
     Invoke-RalphCleanup
@@ -2070,7 +2208,21 @@ function Invoke-RalphCleanup {
     [CmdletBinding()]
     param()
 
-    Add-RalphInstanceLog "Shutting down instance..."
+    # Guard against double cleanup (both finally block and PowerShell.Exiting may fire)
+    if ($script:CleanupDone) {
+        return
+    }
+    $script:CleanupDone = $true
+
+    # Log termination summary first
+    try {
+        $summary = Get-RalphTerminationSummary
+        Add-RalphInstanceLog $summary
+        Write-Host "`n$summary" -ForegroundColor Yellow
+    }
+    catch {
+        Add-RalphInstanceLog "Shutting down instance... (summary unavailable)"
+    }
 
     # Update status
     try {
@@ -2141,6 +2293,123 @@ function Set-RalphCurrentStory {
     )
 
     $script:CurrentStoryId = $StoryId
+}
+
+<#
+.SYNOPSIS
+    Initializes the start time for tracking session duration.
+
+.DESCRIPTION
+    Should be called when ralph starts to enable elapsed time calculation
+    in the termination summary. Also initializes the iteration counter.
+
+.EXAMPLE
+    Initialize-RalphSessionTracking
+#>
+function Initialize-RalphSessionTracking {
+    [CmdletBinding()]
+    param()
+
+    $script:StartTime = Get-Date
+    $script:IterationCount = 0
+}
+
+<#
+.SYNOPSIS
+    Updates the iteration count for tracking progress.
+
+.PARAMETER Iteration
+    The current iteration number.
+
+.EXAMPLE
+    Update-RalphIterationCount -Iteration 5
+#>
+function Update-RalphIterationCount {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Iteration
+    )
+
+    $script:IterationCount = $Iteration
+}
+
+<#
+.SYNOPSIS
+    Gets a termination summary for logging.
+
+.DESCRIPTION
+    Generates a summary of the session including elapsed time, iteration count,
+    completed stories, and any held locks at shutdown.
+
+.OUTPUTS
+    System.String
+    A formatted termination summary string.
+
+.EXAMPLE
+    $summary = Get-RalphTerminationSummary
+#>
+function Get-RalphTerminationSummary {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $lines = @()
+    $lines += "=== TERMINATION SUMMARY ==="
+    $lines += "Instance: $(Get-RalphShortId)"
+
+    # Elapsed time
+    if ($script:StartTime) {
+        $elapsed = (Get-Date) - $script:StartTime
+        $lines += "Elapsed time: $([int]$elapsed.TotalMinutes) minutes $($elapsed.Seconds) seconds"
+    }
+    else {
+        $lines += "Elapsed time: Unknown (session tracking not initialized)"
+    }
+
+    # Iteration count
+    $lines += "Iterations completed: $($script:IterationCount)"
+
+    # Current story at shutdown
+    if ($script:CurrentStoryId) {
+        $lines += "Story in progress at shutdown: $($script:CurrentStoryId)"
+    }
+    else {
+        $lines += "No story in progress at shutdown"
+    }
+
+    # PRD status
+    try {
+        $prd = Read-RalphPrdSafe
+        if ($prd -and $prd.userStories) {
+            $completed = @($prd.userStories | Where-Object { $_.passes -eq $true }).Count
+            $total = $prd.userStories.Count
+            $lines += "PRD status: $completed / $total stories complete"
+        }
+    }
+    catch {
+        $lines += "PRD status: Unable to read"
+    }
+
+    # Locks held
+    try {
+        $instanceId = Get-RalphInstanceId
+        $heldLocks = @(Get-RalphStoryLocks | Where-Object { $_.Owner -eq $instanceId })
+        if ($heldLocks.Count -gt 0) {
+            $lockList = ($heldLocks | ForEach-Object { $_.StoryId }) -join ', '
+            $lines += "Locks to release: $lockList"
+        }
+        else {
+            $lines += "No locks held"
+        }
+    }
+    catch {
+        $lines += "Lock status: Unable to check"
+    }
+
+    $lines += "==========================="
+
+    return $lines -join "`n"
 }
 
 # =============================================================================
@@ -3321,10 +3590,12 @@ Export-ModuleMember -Function @(
     'Test-RalphStoryLocked'
     'Get-RalphStoryLock'
     'Get-RalphStoryLocks'
+    'Get-RalphStaleLocks'
     'Clear-RalphStaleLock'
     'Clear-RalphStaleLocks'
     'Clear-RalphInstanceLocks'
     # PRD atomic functions (PS-003)
+    'Lock-RalphPrd'
     'Read-RalphPrdSafe'
     'Update-RalphPrd'
     # Story claiming functions (PS-004)
@@ -3342,6 +3613,9 @@ Export-ModuleMember -Function @(
     'Register-RalphCleanup'
     'Invoke-RalphCleanup'
     'Set-RalphCurrentStory'
+    'Initialize-RalphSessionTracking'
+    'Update-RalphIterationCount'
+    'Get-RalphTerminationSummary'
     # Global registry functions (GM-001, PS-004)
     'Get-RalphGlobalDir'
     'Initialize-RalphGlobalRegistry'
@@ -3379,4 +3653,16 @@ Export-ModuleMember -Function @(
     'Clear-RalphResumeRequest'
     'Enter-RalphPausedState'
     'Enter-RalphRateLimitedState'
+)
+
+# =============================================================================
+# ALIASES (PS-004)
+# =============================================================================
+
+# Release-RalphStoryClaim is an alias for Remove-RalphStoryClaim
+# This provides the naming specified in PS-004 acceptance criteria
+Set-Alias -Name 'Release-RalphStoryClaim' -Value 'Remove-RalphStoryClaim' -Scope Global
+
+Export-ModuleMember -Alias @(
+    'Release-RalphStoryClaim'
 )

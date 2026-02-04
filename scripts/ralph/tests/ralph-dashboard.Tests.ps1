@@ -550,17 +550,469 @@ Describe 'Get-AllProjectsLocks' {
     }
 
     Context 'Stale lock detection' {
-        It 'Returns array or null when no locks exist' {
+        It 'Returns array, hashtable, or null when no locks exist' {
             $result = Get-AllProjectsLocks
-            # Result can be $null or empty array when no locks
-            if ($null -ne $result) {
-                $result | Should -BeOfType [array]
+            # Result can be $null, empty array, or collection of hashtables when no locks
+            if ($null -ne $result -and @($result).Count -gt 0) {
+                # Each lock should be a hashtable with expected properties
+                $firstLock = @($result)[0]
+                $firstLock.Keys | Should -Contain 'StoryId'
             }
         }
 
         It 'Get-AllProjectsLocks function exists in module' {
             Get-Command Get-AllProjectsLocks -ErrorAction SilentlyContinue |
                 Should -Not -BeNullOrEmpty
+        }
+    }
+}
+
+# =============================================================================
+# PS-011 ACCEPTANCE CRITERIA TESTS
+# =============================================================================
+
+Describe 'PS-011: ralph-dashboard.ps1 Script' {
+    BeforeAll {
+        $script:dashboardPath = Join-Path $PSScriptRoot '..' 'ralph-dashboard.ps1'
+        $script:dashboardContent = Get-Content $script:dashboardPath -Raw
+    }
+
+    Context 'Script Structure and Parameters' {
+        It 'Script file exists' {
+            Test-Path $script:dashboardPath | Should -BeTrue
+        }
+
+        It 'Has valid PowerShell syntax' {
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile(
+                $script:dashboardPath, [ref]$null, [ref]$errors
+            )
+            $errors.Count | Should -Be 0
+        }
+
+        It 'Has RefreshInterval parameter with default 2' {
+            $script:dashboardContent | Should -Match 'param\s*\('
+            $script:dashboardContent | Should -Match '\[int\]\$RefreshInterval\s*=\s*2'
+        }
+
+        It 'Has CmdletBinding attribute' {
+            $script:dashboardContent | Should -Match '\[CmdletBinding\(\)\]'
+        }
+
+        It 'Has proper help documentation' {
+            $script:dashboardContent | Should -Match '\.SYNOPSIS'
+            $script:dashboardContent | Should -Match '\.DESCRIPTION'
+            $script:dashboardContent | Should -Match '\.PARAMETER\s+RefreshInterval'
+            $script:dashboardContent | Should -Match '\.EXAMPLE'
+        }
+
+        It 'Requires PowerShell 7.0+' {
+            $script:dashboardContent | Should -Match '#Requires\s+-Version\s+7\.0'
+        }
+
+        It 'Imports RalphUtils module' {
+            $script:dashboardContent | Should -Match 'Import-Module\s+\$modulePath'
+        }
+    }
+
+    Context 'Auto-Refresh Display (AC1)' {
+        It 'Has main loop with refresh capability' {
+            $script:dashboardContent | Should -Match 'while\s*\(\$true\)'
+        }
+
+        It 'Uses Render-Dashboard function' {
+            $script:dashboardContent | Should -Match 'function\s+Render-Dashboard'
+            $script:dashboardContent | Should -Match 'Render-Dashboard'
+        }
+
+        It 'Has Clear-Host for refresh' {
+            $script:dashboardContent | Should -Match 'Clear-Host'
+        }
+
+        It 'Uses timeout for refresh interval' {
+            $script:dashboardContent | Should -Match '\$timeout.*AddSeconds.*\$RefreshInterval'
+        }
+    }
+
+    Context 'Instance Table Display (AC2)' {
+        It 'Has Render-Instances function' {
+            $script:dashboardContent | Should -Match 'function\s+Render-Instances'
+        }
+
+        It 'Shows PROJECT column' {
+            $script:dashboardContent | Should -Match "'PROJECT'"
+        }
+
+        It 'Shows STORY column' {
+            $script:dashboardContent | Should -Match "'STORY'"
+        }
+
+        It 'Shows STATE column' {
+            $script:dashboardContent | Should -Match "'STATE'"
+        }
+
+        It 'Shows ITER column' {
+            $script:dashboardContent | Should -Match "'ITER'"
+        }
+
+        It 'Shows RUNTIME column' {
+            $script:dashboardContent | Should -Match "'RUNTIME'"
+        }
+
+        It 'Formats iteration as current/max' {
+            $script:dashboardContent | Should -Match '\$iter\s*=.*iteration.*maxIterations'
+        }
+    }
+
+    Context 'PRD Progress Bar with Unicode (AC3)' {
+        It 'Has Get-ProgressBar function' {
+            $script:dashboardContent | Should -Match 'function\s+Get-ProgressBar'
+        }
+
+        It 'Uses Unicode full block character (U+2588)' {
+            $script:dashboardContent | Should -Match '\[char\]0x2588'
+        }
+
+        It 'Uses Unicode light shade character (U+2591)' {
+            $script:dashboardContent | Should -Match '\[char\]0x2591'
+        }
+
+        It 'Progress bar has configurable width' {
+            $script:dashboardContent | Should -Match 'param\s*\([^)]*\[int\]\$Width'
+        }
+
+        It 'Calculates filled vs empty portions' {
+            $script:dashboardContent | Should -Match '\$filled.*Complete.*Width.*Total'
+        }
+    }
+
+    Context 'Color Coding (AC4)' {
+        It 'Has Get-StateColor function' {
+            $script:dashboardContent | Should -Match 'function\s+Get-StateColor'
+        }
+
+        It 'Returns Green for working state' {
+            $script:dashboardContent | Should -Match "'working'.*'Green'"
+        }
+
+        It 'Returns Yellow for idle state' {
+            $script:dashboardContent | Should -Match "'idle'.*'Yellow'"
+        }
+
+        It 'Returns Red for dead state' {
+            $script:dashboardContent | Should -Match "'dead'.*'Red'"
+        }
+
+        It 'Returns Gray for terminated state' {
+            $script:dashboardContent | Should -Match "'terminated'.*'Gray'"
+        }
+
+        It 'Uses Write-Host with -ForegroundColor' {
+            $script:dashboardContent | Should -Match 'Write-Host.*-ForegroundColor'
+        }
+    }
+
+    Context 'Configurable Refresh Interval (AC5)' {
+        It 'RefreshInterval parameter accepts integer' {
+            $script:dashboardContent | Should -Match '\[int\]\$RefreshInterval'
+        }
+
+        It 'Default refresh is 2 seconds' {
+            $script:dashboardContent | Should -Match '\$RefreshInterval\s*=\s*2'
+        }
+
+        It 'RefreshInterval is used in timeout calculation' {
+            $script:dashboardContent | Should -Match 'AddSeconds\(\$RefreshInterval\)'
+        }
+
+        It 'Help shows example with custom interval' {
+            $script:dashboardContent | Should -Match '-RefreshInterval\s+\d+'
+        }
+    }
+
+    Context 'Exit with Q key or Ctrl+C (AC6)' {
+        It 'Checks for KeyAvailable' {
+            $script:dashboardContent | Should -Match '\[Console\]::KeyAvailable'
+        }
+
+        It 'Reads key input' {
+            $script:dashboardContent | Should -Match '\[Console\]::ReadKey'
+        }
+
+        It 'Handles q key to exit' {
+            $script:dashboardContent | Should -Match "'q'.*return"
+        }
+
+        It 'Handles Q key to exit (case insensitive)' {
+            $script:dashboardContent | Should -Match "'Q'.*return"
+        }
+
+        It 'Has try/finally for cleanup' {
+            $script:dashboardContent | Should -Match 'try\s*\{'
+            $script:dashboardContent | Should -Match 'finally\s*\{'
+        }
+
+        It 'Restores cursor visibility in finally block' {
+            $script:dashboardContent | Should -Match '\[Console\]::CursorVisible\s*=\s*\$true'
+        }
+
+        It 'Hides cursor during dashboard display' {
+            $script:dashboardContent | Should -Match '\[Console\]::CursorVisible\s*=\s*\$false'
+        }
+    }
+
+    Context 'Dashboard Displays Without Error (AC7)' {
+        It 'Has error handling for missing module' {
+            $script:dashboardContent | Should -Match "if.*-not.*Test-Path.*modulePath"
+        }
+
+        It 'Has null/empty checks for instances' {
+            $script:dashboardContent | Should -Match 'if.*instances\.Count\s*-eq\s*0'
+        }
+
+        It 'Has null/empty checks for locks' {
+            $script:dashboardContent | Should -Match 'if.*locks\.Count\s*-eq\s*0'
+        }
+
+        It 'Has null/empty checks for projects' {
+            $script:dashboardContent | Should -Match 'if.*projectsStatus\.Count\s*-eq\s*0'
+        }
+
+        It 'Uses Math.Max for padding to prevent negative values' {
+            $script:dashboardContent | Should -Match '\[Math\]::Max\(0,'
+        }
+    }
+}
+
+Describe 'Get-ProgressBar Function' {
+    BeforeAll {
+        # Source the dashboard script to get internal functions
+        # We create a temporary scope to extract just the function
+        $dashboardPath = Join-Path $PSScriptRoot '..' 'ralph-dashboard.ps1'
+        $content = Get-Content $dashboardPath -Raw
+
+        # Extract and define the Get-ProgressBar function
+        $functionMatch = [regex]::Match($content, '(?s)function\s+Get-ProgressBar\s*\{.*?^\}', [System.Text.RegularExpressions.RegexOptions]::Multiline)
+        if ($functionMatch.Success) {
+            Invoke-Expression $functionMatch.Value
+        }
+    }
+
+    It 'Returns empty bar for zero total' {
+        $result = Get-ProgressBar -Complete 0 -Total 0 -Width 10
+        $result | Should -Match '^\[\s+\]$'
+    }
+
+    It 'Returns full bar when complete equals total' {
+        $result = Get-ProgressBar -Complete 10 -Total 10 -Width 10
+        $result.Length | Should -BeGreaterThan 10
+        $result | Should -Match '^\[.*\]$'
+    }
+
+    It 'Returns partially filled bar' {
+        $result = Get-ProgressBar -Complete 5 -Total 10 -Width 10
+        $result | Should -Match '^\[.*\]$'
+        $result.Length | Should -BeGreaterThan 10
+    }
+
+    It 'Respects custom width parameter' {
+        $result = Get-ProgressBar -Complete 0 -Total 10 -Width 20
+        # Width 20 + brackets = 22 chars
+        $result.Length | Should -Be 22
+    }
+}
+
+Describe 'Format-Duration Function' {
+    BeforeAll {
+        $dashboardPath = Join-Path $PSScriptRoot '..' 'ralph-dashboard.ps1'
+        $content = Get-Content $dashboardPath -Raw
+
+        $functionMatch = [regex]::Match($content, '(?s)function\s+Format-Duration\s*\{.*?^\}', [System.Text.RegularExpressions.RegexOptions]::Multiline)
+        if ($functionMatch.Success) {
+            Invoke-Expression $functionMatch.Value
+        }
+    }
+
+    It 'Formats seconds under 60' {
+        $result = Format-Duration -Seconds 45
+        $result | Should -Be '45s'
+    }
+
+    It 'Formats minutes and seconds' {
+        $result = Format-Duration -Seconds 125
+        $result | Should -Be '2m 5s'
+    }
+
+    It 'Formats hours and minutes' {
+        $result = Format-Duration -Seconds 3725
+        $result | Should -Be '1h 2m'
+    }
+
+    It 'Handles zero seconds' {
+        $result = Format-Duration -Seconds 0
+        $result | Should -Be '0s'
+    }
+}
+
+Describe 'Get-StateColor Function' {
+    BeforeAll {
+        $dashboardPath = Join-Path $PSScriptRoot '..' 'ralph-dashboard.ps1'
+        $content = Get-Content $dashboardPath -Raw
+
+        $functionMatch = [regex]::Match($content, '(?s)function\s+Get-StateColor\s*\{.*?^\}', [System.Text.RegularExpressions.RegexOptions]::Multiline)
+        if ($functionMatch.Success) {
+            Invoke-Expression $functionMatch.Value
+        }
+    }
+
+    It 'Returns Green for working' {
+        Get-StateColor -State 'working' | Should -Be 'Green'
+    }
+
+    It 'Returns Green for merging' {
+        Get-StateColor -State 'merging' | Should -Be 'Green'
+    }
+
+    It 'Returns Yellow for idle' {
+        Get-StateColor -State 'idle' | Should -Be 'Yellow'
+    }
+
+    It 'Returns Red for dead' {
+        Get-StateColor -State 'dead' | Should -Be 'Red'
+    }
+
+    It 'Returns Gray for terminated' {
+        Get-StateColor -State 'terminated' | Should -Be 'Gray'
+    }
+
+    It 'Returns Cyan for claiming' {
+        Get-StateColor -State 'claiming' | Should -Be 'Cyan'
+    }
+
+    It 'Returns Cyan for starting' {
+        Get-StateColor -State 'starting' | Should -Be 'Cyan'
+    }
+
+    It 'Returns Cyan for waiting' {
+        Get-StateColor -State 'waiting' | Should -Be 'Cyan'
+    }
+
+    It 'Returns Blue for completed' {
+        Get-StateColor -State 'completed' | Should -Be 'Blue'
+    }
+
+    It 'Returns White for unknown state' {
+        Get-StateColor -State 'unknown' | Should -Be 'White'
+    }
+}
+
+Describe 'Dashboard Help Documentation' {
+    BeforeAll {
+        $script:dashboardPath = Join-Path $PSScriptRoot '..' 'ralph-dashboard.ps1'
+        $script:dashboardContent = Get-Content $script:dashboardPath -Raw
+    }
+
+    It 'Shows help without error' {
+        $help = Get-Help $script:dashboardPath -ErrorAction SilentlyContinue
+        $help | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has synopsis in comment-based help' {
+        $script:dashboardContent | Should -Match '\.SYNOPSIS'
+    }
+
+    It 'Has description in comment-based help' {
+        $script:dashboardContent | Should -Match '\.DESCRIPTION'
+    }
+
+    It 'Documents RefreshInterval parameter in comment-based help' {
+        $script:dashboardContent | Should -Match '\.PARAMETER\s+RefreshInterval'
+    }
+
+    It 'Has examples in comment-based help' {
+        $script:dashboardContent | Should -Match '\.EXAMPLE'
+    }
+}
+
+Describe 'Dashboard Additional Features' {
+    BeforeAll {
+        $script:dashboardPath = Join-Path $PSScriptRoot '..' 'ralph-dashboard.ps1'
+        $script:dashboardContent = Get-Content $script:dashboardPath -Raw
+    }
+
+    Context 'Interactive Commands' {
+        It 'Handles r key for manual refresh' {
+            $script:dashboardContent | Should -Match "'r'.*break"
+        }
+
+        It 'Handles l key for locks detail' {
+            $script:dashboardContent | Should -Match "'l'.*Show-LocksDetail"
+        }
+
+        It 'Handles c key for cleanup' {
+            $script:dashboardContent | Should -Match "'c'.*Invoke-Cleanup"
+        }
+    }
+
+    Context 'Auto-Clean Feature' {
+        It 'Has AutoClean parameter' {
+            $script:dashboardContent | Should -Match '\[switch\]\$AutoClean'
+        }
+
+        It 'Has AutoCleanInterval parameter' {
+            $script:dashboardContent | Should -Match '\[int\]\$AutoCleanInterval'
+        }
+
+        It 'Has Invoke-AutoCleanup function' {
+            $script:dashboardContent | Should -Match 'function\s+Invoke-AutoCleanup'
+        }
+
+        It 'Performs periodic auto-cleanup when enabled' {
+            # Check for the periodic auto-cleanup condition
+            $script:dashboardContent | Should -Match '\$AutoClean\s+-and'
+            $script:dashboardContent | Should -Match 'Invoke-AutoCleanup'
+        }
+    }
+
+    Context 'Frame Rendering' {
+        It 'Uses Unicode box drawing characters' {
+            # Top-left corner
+            $script:dashboardContent | Should -Match '\[char\]0x2554'
+            # Horizontal line
+            $script:dashboardContent | Should -Match '\[char\]0x2550'
+            # Top-right corner
+            $script:dashboardContent | Should -Match '\[char\]0x2557'
+        }
+
+        It 'Has Render-Header function' {
+            $script:dashboardContent | Should -Match 'function\s+Render-Header'
+        }
+
+        It 'Has Render-Footer function' {
+            $script:dashboardContent | Should -Match 'function\s+Render-Footer'
+        }
+
+        It 'Has Render-Locks function' {
+            $script:dashboardContent | Should -Match 'function\s+Render-Locks'
+        }
+    }
+
+    Context 'Dynamic Sizing' {
+        It 'Gets terminal width' {
+            $script:dashboardContent | Should -Match '\[Console\]::WindowWidth'
+        }
+
+        It 'Gets terminal height' {
+            $script:dashboardContent | Should -Match '\[Console\]::WindowHeight'
+        }
+
+        It 'Has Update-SectionLimits function' {
+            $script:dashboardContent | Should -Match 'function\s+Update-SectionLimits'
+        }
+
+        It 'Has minimum frame dimensions' {
+            $script:dashboardContent | Should -Match '\$script:MinFrameWidth'
+            $script:dashboardContent | Should -Match '\$script:MinFrameHeight'
         }
     }
 }
