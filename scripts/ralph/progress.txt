@@ -1,5 +1,34 @@
 ## Codebase Patterns
 - Ralph function definitions in PowerShell profile follow pattern: `function ralph-xxx { pwsh "$path/ralph-xxx.ps1" @args }`
+- ralph.ps1 multi-instance integration: generates instance ID, creates instance dir, writes status.json with heartbeat, claims/releases stories, uses feature branches
+
+---
+
+## 2026-02-04 - PS-006: PowerShell Main Script Multi-Instance Update
+- What was implemented:
+  - Verified ralph.ps1 already implements all PS-006 acceptance criteria:
+    - Instance ID generation via Get-RalphInstanceId/Get-RalphShortId
+    - Instance directory creation via New-RalphInstanceDirectory on startup
+    - Instance-specific logging via Add-RalphInstanceLog to instances/{id}/ralph.log
+    - Status.json updates with heartbeat via Update-RalphStatus on each iteration
+    - Story claiming via Request-RalphNextStoryClaim, releasing via Remove-RalphStoryClaim
+    - Feature branch creation via New-RalphStoryBranch for each story
+    - Branch merge via Merge-RalphStoryBranch on completion
+  - Added 17 new Pester tests to ralph.Tests.ps1 for PS-006 coverage:
+    - Multi-Instance Integration tests (script structure verification)
+    - Instance Directory Creation tests (functional tests with mocked paths)
+    - Status Updates During Lifecycle tests (state changes, heartbeat updates)
+- Files changed:
+  - scripts/ralph/tests/ralph.Tests.ps1 (added 208 lines - 17 new tests)
+  - prd-powershell-port.json (marked PS-006 as passes: true)
+- **Learnings for future iterations:**
+  - ralph.ps1 Main function initializes multi-instance early: New-RalphInstanceDirectory -> Register-RalphCleanup -> Register-RalphGlobalInstance
+  - Status updates use InstancePaths hashtable for atomic writes via Update-RalphStatus
+  - Test using $script:scriptContent pattern to verify script structure without executing
+  - Mock Get-RalphPaths to test instance creation with TestDrive: isolation
+  - All 84 ralph.Tests.ps1 tests pass
+
+---
 - Profile parsing should handle both Unix (\n) and Windows (\r\n) line endings using `$content -split "\`r?\`n"`
 - Tests in scripts/ralph/tests/ use Pester 5.x with BeforeAll blocks for test setup
 - When comparing profile functions, use Get-ExpectedRalphFunctions, Get-ProfileRalphFunctions, Compare-RalphFunctions
