@@ -474,11 +474,12 @@ claim_next_story() {
 
     while [ $retry -lt $max_retries ]; do
         # Get list of incomplete, unclaimed stories ordered by priority
+        # Use (.passes != true) to catch stories with passes: false, null, or missing
         local stories=$(read_prd | jq -r '
             .userStories
             | sort_by(.priority)
             | .[]
-            | select(.passes == false)
+            | select(.passes != true)
             | select(.claimedBy == null or .claimedBy == "")
             | .id
         ' 2>/dev/null)
@@ -842,8 +843,16 @@ all_stories_complete() {
         return 1
     fi
 
-    local incomplete=$(read_prd | jq '[.userStories[] | select(.passes == false)] | length' 2>/dev/null || echo "1")
-    [ "$incomplete" -eq 0 ]
+    # Count stories with passes == true and compare to total
+    # This is more robust than checking for passes == false, because
+    # stories with passes: null, missing, or non-boolean values are
+    # correctly treated as incomplete.
+    local prd_content
+    prd_content=$(read_prd)
+    local total=$(echo "$prd_content" | jq '.userStories | length' 2>/dev/null || echo "0")
+    local complete=$(echo "$prd_content" | jq '[.userStories[] | select(.passes == true)] | length' 2>/dev/null || echo "0")
+
+    [ "$total" -gt 0 ] && [ "$complete" -eq "$total" ]
 }
 
 get_status() {
@@ -1055,7 +1064,7 @@ main() {
 
         # If rate limited, release claim and continue to next iteration
         if [ $rate_limit_detected -eq 1 ]; then
-            release_story_claim
+            release_story_claim || true
             continue
         fi
 
@@ -1064,7 +1073,8 @@ main() {
             cd "$SCRIPT_DIR"
             echo -e "${RED}Claude Code failed with exit code $claude_exit_code${NC}"
             echo -e "${YELLOW}Releasing story and continuing...${NC}"
-            release_story_claim
+            release_story_claim || true
+            continue
         fi
         cd "$SCRIPT_DIR"
 
@@ -1084,10 +1094,13 @@ main() {
 
             # Merge back to main branch
             update_status "merging" "$CURRENT_STORY_ID"
-            merge_story_branch "$CURRENT_STORY_ID"
+            if ! merge_story_branch "$CURRENT_STORY_ID"; then
+                log "WARNING: Failed to merge story branch, continuing loop..."
+                echo -e "${YELLOW}Merge failed for $CURRENT_STORY_ID, will retry next iteration${NC}"
+            fi
 
-            # Release claim
-            release_story_claim
+            # Release claim (protect from set -e)
+            release_story_claim || log "WARNING: Failed to release claim for $CURRENT_STORY_ID"
         fi
 
         # Check for completion signal
@@ -1138,7 +1151,7 @@ main() {
         fi
 
         # Show what's remaining
-        local remaining_new=$(read_prd | jq '[.userStories[] | select(.passes == false)] | length' 2>/dev/null || echo "?")
+        local remaining_new=$(read_prd | jq '[.userStories[] | select(.passes != true)] | length' 2>/dev/null || echo "?")
         if [ "$remaining_new" != "?" ] && [ "$remaining_new" -gt 0 ]; then
             echo -e "${YELLOW}${remaining_new} stories still remaining. Continuing...${NC}"
         fi
@@ -1162,7 +1175,7 @@ main() {
     update_status "max_iterations" "$CURRENT_STORY_ID"
 
     # Release any held story
-    release_story_claim
+    release_story_claim || true
 }
 
 main "$@"

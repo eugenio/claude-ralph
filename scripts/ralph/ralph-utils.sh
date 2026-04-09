@@ -545,7 +545,7 @@ get_incomplete_stories() {
         prd_json=$(cat "$PRD_FILE")
     fi
 
-    echo "$prd_json" | jq '[.userStories[] | select(.passes == false)] | sort_by(.priority)'
+    echo "$prd_json" | jq '[.userStories[] | select(.passes != true)] | sort_by(.priority)'
 }
 
 # =============================================================================
@@ -1293,7 +1293,7 @@ get_ralph_next_story() {
 
     # Get incomplete, unclaimed stories sorted by priority
     local available
-    available=$(echo "$prd_json" | jq '[.userStories[] | select(.passes == false) | select(.claimedBy == null or .claimedBy == "")] | sort_by(.priority)')
+    available=$(echo "$prd_json" | jq '[.userStories[] | select(.passes != true) | select(.claimedBy == null or .claimedBy == "")] | sort_by(.priority)')
 
     local story_count
     story_count=$(echo "$available" | jq 'length')
