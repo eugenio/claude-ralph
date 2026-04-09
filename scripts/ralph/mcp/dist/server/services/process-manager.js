@@ -1,7 +1,9 @@
+import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { invokeRalphScript, killProcess, isProcessRunning, waitForProcessExit, sleep, } from '../../shared/platform.js';
 import { getAllInstances } from './state-reader.js';
 import { recordActiveInstances } from '../../shared/index.js';
+import { getGlobalPaths, getProjectName } from '../../shared/paths.js';
 /**
  * Get the ralph scripts directory
  */
@@ -154,7 +156,7 @@ async function waitForInstanceStart(projectRoot, pid, timeoutMs) {
 export async function stopInstance(instanceId, force = false) {
     const instances = await getAllInstances({
         includeGlobal: true,
-        includeDead: false,
+        includeDead: true,
     });
     const instance = instances.find(i => i.instanceId === instanceId);
     if (!instance) {
@@ -167,11 +169,27 @@ export async function stopInstance(instanceId, force = false) {
     return stopInstanceByInfo(instance, force);
 }
 /**
+ * Remove the global registry symlink for a stopped instance
+ */
+async function removeGlobalSymlink(instance) {
+    try {
+        const globalPaths = getGlobalPaths();
+        const projectName = getProjectName(instance.projectRoot);
+        const symlinkPath = path.join(globalPaths.globalInstancesDir, `${projectName}-${instance.instanceId}`);
+        await fs.unlink(symlinkPath);
+    }
+    catch {
+        // Symlink might not exist — ignore
+    }
+}
+/**
  * Stop an instance by its info
  */
 async function stopInstanceByInfo(instance, force) {
     const signal = force ? 'SIGKILL' : 'SIGTERM';
     if (!isProcessRunning(instance.pid)) {
+        // Process already gone — still clean up the registry entry
+        await removeGlobalSymlink(instance);
         return {
             instanceId: instance.instanceId,
             success: true, // Already stopped
@@ -192,6 +210,7 @@ async function stopInstanceByInfo(instance, force) {
         killProcess(instance.pid, 'SIGKILL');
         await waitForProcessExit(instance.pid, 2000);
     }
+    await removeGlobalSymlink(instance);
     return {
         instanceId: instance.instanceId,
         success: true,

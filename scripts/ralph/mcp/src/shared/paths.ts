@@ -46,14 +46,35 @@ export function getGlobalPaths(): RalphPaths {
 /**
  * Get project-specific ralph paths
  */
-export function getProjectPaths(projectRoot?: string): ProjectPaths {
+export function getProjectPaths(projectRoot?: string, prdPath?: string): ProjectPaths {
   const root = projectRoot
     || process.env.RALPH_PROJECT_ROOT
     || process.cwd();
 
   const ralphDir = path.join(root, 'scripts', 'ralph');
-  const prdFile = process.env.RALPH_PRD_FILE
-    || path.join(ralphDir, 'prd.json');
+
+  // Resolve PRD file: explicit arg > env var > .ralph/*.json scan > fallback template
+  let prdFile: string;
+  if (prdPath) {
+    prdFile = prdPath;
+  } else if (process.env.RALPH_PRD_FILE) {
+    prdFile = process.env.RALPH_PRD_FILE;
+  } else {
+    // Check <projectRoot>/.ralph/ for user PRD files (preferred location)
+    const dotRalphDir = path.join(root, '.ralph');
+    prdFile = path.join(ralphDir, 'prd.json'); // fallback to bundled template
+    try {
+      const entries = fs.readdirSync(dotRalphDir);
+      const jsonFiles = entries
+        .filter(e => e.endsWith('.json') && !e.startsWith('_'))
+        .sort();
+      if (jsonFiles.length > 0) {
+        prdFile = path.join(dotRalphDir, jsonFiles[0]);
+      }
+    } catch {
+      // .ralph/ doesn't exist — use template fallback
+    }
+  }
 
   return {
     projectRoot: root,

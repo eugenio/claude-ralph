@@ -10,6 +10,7 @@ import { jsonResponse, errorResponse, ToolDefinition, ToolHandler } from './inde
 // Input schema
 export const RalphStatusInputSchema = z.object({
   projectRoot: z.string().optional(),
+  prdPath: z.string().optional(),
   includeGlobal: z.boolean().default(true),
   includeDead: z.boolean().default(false),
 });
@@ -26,6 +27,10 @@ export const ralphStatusDefinition: ToolDefinition = {
       projectRoot: {
         type: 'string',
         description: 'Project root directory to scope instance discovery',
+      },
+      prdPath: {
+        type: 'string',
+        description: 'Explicit path to PRD JSON file (overrides auto-detection from .ralph/)',
       },
       includeGlobal: {
         type: 'boolean',
@@ -78,7 +83,7 @@ export const ralphStatusHandler: ToolHandler = async (args) => {
     }> = [];
 
     if (input.projectRoot) {
-      const projectPaths = getProjectPaths(input.projectRoot);
+      const projectPaths = getProjectPaths(input.projectRoot, input.prdPath);
 
       // Read PRD
       const prdProgress = await getPrdProgress(projectPaths.prdFile);

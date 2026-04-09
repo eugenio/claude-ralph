@@ -1,3 +1,4 @@
+import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import {
   invokeRalphScript,
@@ -8,6 +9,7 @@ import {
 } from '../../shared/platform.js';
 import { getAllInstances } from './state-reader.js';
 import { InstanceInfo, recordActiveInstances } from '../../shared/index.js';
+import { getGlobalPaths, getProjectName } from '../../shared/paths.js';
 
 export interface StartInstanceOptions {
   prdPath: string;
@@ -223,7 +225,7 @@ export async function stopInstance(
 ): Promise<StopInstanceResult> {
   const instances = await getAllInstances({
     includeGlobal: true,
-    includeDead: false,
+    includeDead: true,
   });
 
   const instance = instances.find(i => i.instanceId === instanceId);
@@ -240,6 +242,23 @@ export async function stopInstance(
 }
 
 /**
+ * Remove the global registry symlink for a stopped instance
+ */
+async function removeGlobalSymlink(instance: InstanceInfo): Promise<void> {
+  try {
+    const globalPaths = getGlobalPaths();
+    const projectName = getProjectName(instance.projectRoot);
+    const symlinkPath = path.join(
+      globalPaths.globalInstancesDir,
+      `${projectName}-${instance.instanceId}`
+    );
+    await fs.unlink(symlinkPath);
+  } catch {
+    // Symlink might not exist — ignore
+  }
+}
+
+/**
  * Stop an instance by its info
  */
 async function stopInstanceByInfo(
@@ -249,6 +268,8 @@ async function stopInstanceByInfo(
   const signal = force ? 'SIGKILL' : 'SIGTERM';
 
   if (!isProcessRunning(instance.pid)) {
+    // Process already gone — still clean up the registry entry
+    await removeGlobalSymlink(instance);
     return {
       instanceId: instance.instanceId,
       success: true, // Already stopped
@@ -273,6 +294,8 @@ async function stopInstanceByInfo(
     killProcess(instance.pid, 'SIGKILL');
     await waitForProcessExit(instance.pid, 2000);
   }
+
+  await removeGlobalSymlink(instance);
 
   return {
     instanceId: instance.instanceId,

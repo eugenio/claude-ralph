@@ -26,7 +26,7 @@ export declare function getGlobalPaths(): RalphPaths;
 /**
  * Get project-specific ralph paths
  */
-export declare function getProjectPaths(projectRoot?: string): ProjectPaths;
+export declare function getProjectPaths(projectRoot?: string, prdPath?: string): ProjectPaths;
 /**
  * Ensure a directory exists, creating it if necessary
  */

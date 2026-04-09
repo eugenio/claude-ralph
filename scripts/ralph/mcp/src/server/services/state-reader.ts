@@ -116,7 +116,8 @@ export async function readGlobalInstances(): Promise<InstanceInfo[]> {
           instances.push(getInstanceInfo(status, realPath));
         }
       } catch {
-        // Broken symlink or can't read - skip
+        // Broken symlink — remove it to prevent registry accumulation
+        try { await fs.unlink(linkPath); } catch { /* ignore */ }
       }
     }
   } catch {
@@ -157,8 +158,11 @@ export async function getAllInstances(options: {
     const existingIds = new Set(instances.map(i => i.instanceId));
     for (const inst of globalInstances) {
       if (!existingIds.has(inst.instanceId)) {
-        // Filter by projectRoot if specified
-        if (!projectRoot || inst.projectRoot === projectRoot) {
+        // Filter by projectRoot if specified; use startsWith so worktree instances
+        // (whose projectRoot is a subdirectory of the project) are included
+        const normalizedFilter = projectRoot ? path.resolve(projectRoot) : null;
+        const normalizedInst = path.resolve(inst.projectRoot);
+        if (!normalizedFilter || normalizedInst.startsWith(normalizedFilter)) {
           instances.push(inst);
           existingIds.add(inst.instanceId);
         }
