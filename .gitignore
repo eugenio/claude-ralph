@@ -41,6 +41,10 @@ Thumbs.db
 # Node (if using any JS tooling)
 node_modules/
 
+# Mempalace (local knowledge graph config)
+entities.json
+mempalace.yaml
+
 # Project-specific working files
 scripts/ralph/prd.json
 tasks/
